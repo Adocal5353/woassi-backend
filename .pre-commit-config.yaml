@@ -1,0 +1,26 @@
+# Local hooks: they use the versions locked in uv.lock.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff-format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: lint-imports
+        name: lint-imports
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false

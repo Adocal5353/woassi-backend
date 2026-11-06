@@ -1,0 +1,133 @@
+[project]
+name = "woassi"
+version = "0.1.0"
+description = "Woassi backend: WhatsApp commerce platform for Togolese merchants"
+readme = "README.md"
+authors = [
+    { name = "justinadjassem", email = "justin.adjassem@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "anyio>=4.16.0",
+    "arq>=0.28.0",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "minio>=7.2.20",
+    "phonenumbers>=9.0.43",
+    "pillow>=13.0.0",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "pyjwt>=2.15.1",
+    "python-multipart>=0.0.33",
+    "redis>=5.3.1",
+    "sentry-sdk[fastapi]>=2.74.0",
+    "sqlalchemy[asyncio]>=2.1.8",
+    "structlog>=26.1.0",
+    "tenacity>=9.2.1",
+    "uvicorn[standard]>=0.54.0",
+    "weasyprint>=70.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.16",
+    "mypy>=2.4.1",
+    "polyfactory>=3.5.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "pytest-cov>=7.1.0",
+    "respx>=0.23.1",
+    "ruff>=0.17.4",
+    "testcontainers[minio,postgres]>=4.15.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "ASYNC", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--strict-markers -m 'not integration'"
+markers = ["integration: tests that need Docker (testcontainers), excluded by default"]
+
+[tool.importlinter]
+root_package = "woassi"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers of each module: api > infrastructure > application > domain"
+type = "layers"
+layers = ["api", "infrastructure", "application", "domain"]
+containers = [
+    "woassi.modules.shops",
+    "woassi.modules.catalog",
+    "woassi.modules.customers",
+    "woassi.modules.orders",
+    "woassi.modules.accounts",
+    "woassi.modules.billing",
+    "woassi.modules.messaging",
+    "woassi.modules.payments",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and application stay pure (no framework, no I/O)"
+type = "forbidden"
+source_modules = [
+    "woassi.shared.domain",
+    "woassi.shared.application",
+    "woassi.modules.*.domain",
+    "woassi.modules.*.application",
+]
+forbidden_modules = [
+    "fastapi",
+    "sqlalchemy",
+    "minio",
+    "arq",
+    "redis",
+    "httpx",
+    "PIL",
+    "pydantic",
+]
+
+[[tool.importlinter.contracts]]
+name = "Modules are independent of each other"
+type = "independence"
+modules = [
+    "woassi.modules.shops",
+    "woassi.modules.catalog",
+    "woassi.modules.customers",
+    "woassi.modules.orders",
+    "woassi.modules.accounts",
+    "woassi.modules.billing",
+    "woassi.modules.messaging",
+    "woassi.modules.payments",
+]
+
+[[tool.importlinter.contracts]]
+name = "The api goes through use cases, never through infrastructure"
+type = "forbidden"
+source_modules = ["woassi.modules.*.api"]
+forbidden_modules = ["woassi.modules.*.infrastructure"]
+allow_indirect_imports = true

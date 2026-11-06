@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["woassi.main:create_app", "--factory", "--reload", "--port", "8000"],
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "Worker (arq)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "arq",
+      "args": ["woassi.worker.WorkerSettings"],
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true
+    }
+  ]
+}

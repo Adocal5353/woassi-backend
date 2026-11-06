@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Outils
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Secrets
+.env

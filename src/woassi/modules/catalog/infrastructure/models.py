@@ -1,0 +1,66 @@
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from woassi.shared.infrastructure.db.base import Base
+
+
+class ProductModel(Base):
+    __tablename__ = "products"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "retailer_id"),
+        CheckConstraint("price >= 0", name="price_positive"),
+        CheckConstraint("stock >= 0", name="stock_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    # TODO: FK to shops once that module exists.
+    shop_id: Mapped[UUID]
+    name: Mapped[str] = mapped_column(String(200))
+    price: Mapped[int] = mapped_column(BigInteger)
+    stock: Mapped[int]
+    retailer_id: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    photos: Mapped[list["ProductPhotoModel"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ProductPhotoModel.position",
+    )
+
+
+class ProductPhotoModel(Base):
+    __tablename__ = "product_photos"
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDING', 'READY', 'REJECTED')", name="status_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    product_id: Mapped[UUID] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    original_key: Mapped[str] = mapped_column(String(500))
+    content_type: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20))
+    position: Mapped[int]
+    variants: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

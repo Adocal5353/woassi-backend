@@ -1,0 +1,106 @@
+x-app: &app
+  build: .
+  image: woassi-api:dev
+  env_file: .env
+  environment: &app-env
+    # On the Compose network, services reach each other by name.
+    DATABASE_URL: postgresql+asyncpg://woassi:woassi@postgres:5432/woassi
+    REDIS_URL: redis://redis:6379/0
+    MINIO_ENDPOINT: minio:9000
+  volumes:
+    - ./src:/app/src:ro
+    - ./templates:/app/templates:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+
+services:
+  api:
+    <<: *app
+    command: uvicorn woassi.main:create_app --factory --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *app
+    command: arq woassi.worker.WorkerSettings
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: woassi
+      POSTGRES_PASSWORD: woassi
+      POSTGRES_DB: woassi
+    ports:
+      # 5433 on the host: 5432 is often taken by a local PostgreSQL.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U woassi -d woassi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    # The minio/minio image is no longer available on Docker Hub.
+    image: cgr.dev/chainguard/minio:latest
+    # Named volume created as root: the default user (65532) cannot write to it.
+    user: "0:0"
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # The image has no curl, mc or grep: HTTP request using bash builtins.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000
+          && printf 'GET /minio/health/live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          && read -r status <&3
+          && [[ "$$status" == *" 200 "* ]]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    # The -dev variant is the only one that ships a shell.
+    image: cgr.dev/chainguard/minio-client:latest-dev
+    env_file: .env
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export MC_HOST_local="http://$${MINIO_ACCESS_KEY}:$${MINIO_SECRET_KEY}@minio:9000"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_UPLOADS}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_PRODUCTS}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_DOCUMENTS}"
+        mc anonymous set download "local/$${MINIO_BUCKET_PRODUCTS}"
+
+volumes:
+  postgres-data:
+  minio-data:
