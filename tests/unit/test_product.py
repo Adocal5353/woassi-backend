@@ -8,6 +8,7 @@ from woassi.modules.catalog.domain.errors import (
     PhotoNotFound,
     TooManyPhotos,
 )
+from woassi.modules.catalog.domain.events import ProductCreated
 from woassi.modules.catalog.domain.product import PhotoStatus, Product
 from woassi.shared.domain.values import Amount
 
@@ -86,3 +87,11 @@ def test_rejected_photo_frees_its_slot() -> None:
 def test_photo_not_found() -> None:
     with pytest.raises(PhotoNotFound):
         product().photo(uuid4())
+
+
+def test_create_records_an_event_pulled_only_once() -> None:
+    p = product()
+    [event] = p.pull_events()
+    assert isinstance(event, ProductCreated)
+    assert (event.product_id, event.shop_id, event.retailer_id) == (p.id, p.shop_id, "SKU-1")
+    assert p.pull_events() == []

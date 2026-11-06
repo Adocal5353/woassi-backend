@@ -7,6 +7,7 @@ from arq.connections import RedisSettings
 from woassi.config import get_settings
 from woassi.container import Container
 from woassi.modules.messaging.domain.event import MetaEvent
+from woassi.shared.domain.events import DomainEvent
 from woassi.shared.infrastructure.logging import configure_logging, configure_sentry
 
 log = structlog.get_logger()
@@ -28,7 +29,7 @@ async def process_photo(ctx: dict[str, Any], photo_id: str) -> None:
 
 
 async def process_meta_event(ctx: dict[str, Any], event: MetaEvent) -> None:
-    # TODO: idempotency via InboundEvent on message_id, then routing to orders.
+    # TODO: idempotency with process_once on message_id, then routing to orders.
     log.info(
         "meta_event_received",
         phone_number_id=event.phone_number_id,
@@ -37,8 +38,12 @@ async def process_meta_event(ctx: dict[str, Any], event: MetaEvent) -> None:
     )
 
 
+async def dispatch_event(ctx: dict[str, Any], subscriber: str, event: DomainEvent) -> None:
+    await ctx["container"].event_bus.dispatch(subscriber, event)
+
+
 class WorkerSettings:
-    functions = (process_photo, process_meta_event)
+    functions = (process_photo, process_meta_event, dispatch_event)
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

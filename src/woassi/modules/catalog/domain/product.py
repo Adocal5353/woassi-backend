@@ -8,6 +8,8 @@ from woassi.modules.catalog.domain.errors import (
     PhotoNotFound,
     TooManyPhotos,
 )
+from woassi.modules.catalog.domain.events import ProductCreated
+from woassi.shared.domain.events import Entity
 from woassi.shared.domain.values import Amount
 
 DEFAULT_MAX_PHOTOS = 5
@@ -46,7 +48,7 @@ class ProductPhoto:
 
 
 @dataclass(slots=True)
-class Product:
+class Product(Entity):
     id: UUID
     shop_id: UUID
     name: str
@@ -76,7 +78,7 @@ class Product:
             raise InvalidProduct("Product retailer_id is required.")
         if stock < 0:
             raise InvalidProduct("Stock cannot be negative.")
-        return cls(
+        product = cls(
             id=uuid4(),
             shop_id=shop_id,
             name=name,
@@ -85,6 +87,10 @@ class Product:
             retailer_id=retailer_id,
             description=description,
         )
+        product.record_event(
+            ProductCreated(product_id=product.id, shop_id=shop_id, retailer_id=retailer_id)
+        )
+        return product
 
     def adjust_stock(self, delta: int) -> None:
         if self.stock + delta < 0:

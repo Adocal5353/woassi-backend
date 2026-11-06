@@ -37,6 +37,43 @@ Clean architecture + modular monolith. Each module in `src/woassi/modules/` has 
 
 `uv run lint-imports` enforces these rules (contracts in `pyproject.toml`).
 
+## Talking between modules
+
+- **Synchronous call:** the consumer declares what it needs in its own `application/ports.py`
+  (e.g. `orders` declares `CatalogPort.reserve_stock(...)`). The implementation lives in
+  `src/woassi/integration/`, outside the modules, and calls the provider's use cases. It is bound
+  in `container.py`. Modules never import `integration`, and `integration` never imports a
+  module's `api` or `infrastructure`.
+- **Domain events:** entities inherit from `Entity` and call `record_event(...)`. Repositories
+  track saved entities with the Unit of Work's `_track`, which publishes `pull_events()` after the
+  commit, and drops them on rollback. Module UoWs inherit from `SqlAlchemyUnitOfWork`.
+- **Subscribers** are registered in `Container._register_subscribers`, which runs in both the API
+  and the worker: `bus.subscribe(Event, handler, name="billing.issue_invoice", deferred=True)`.
+  A `deferred` subscriber runs in the worker through the `dispatch_event` job. Its `name` is stored
+  in queued jobs: keep it stable. An event class must be frozen and `kw_only`, and it is pickled.
+- Events are delivered at most once: a crash right after a commit loses them, a failing subscriber
+  is only logged, and `dispatch_event` is not retried.
+
+## Shared foundation
+
+- **Secrets:** always go through the `SecretCipher` port (`Container.cipher`), never store a Meta
+  token or aggregator credential in clear text.
+- **Audit:** `uow.audit.record(...)` before `uow.commit()`, so that the entry shares the action's
+  transaction. Actions look like `order.validated`, `invoice.issued`,
+  `receiving_account.updated`. The log is append-only: read it with
+  `GET /shops/{shop_id}/audit-log`.
+- **Webhooks and jobs:** `async with process_once(session, source, key) as is_new:` runs the block
+  once per key. The key joins the caller's transaction, so the caller must commit.
+- **Rate limits:** `enforce(limiter, key, limit, window_s)`, 429 with `Retry-After`.
+- **Sensitive POST routes:** `dependencies=[Depends(idempotent)]` adds the optional
+  `Idempotency-Key` header. Not applied to any route yet.
+- **Time:** inject `Clock`, never call `datetime.now()`. Store `now()` (UTC); `local_now()`
+  (Africa/Lome) is for display. Use `FrozenClock` in tests.
+- **Lists:** routes return `Page[T]` built from a use case's `PageResult[T]`, with the shared
+  `Offset` and `Limit` query parameters.
+- **Phone numbers:** `PhoneNumber` holds E.164 only; `PhoneNormalizer` parses free-form input,
+  with Togo as the default country.
+
 ## Naming
 
 All code is in English: identifiers, classes, files, URLs, tables, error codes, messages and
@@ -52,6 +89,25 @@ comments. Prompts may use French business terms; translate them with this glossa
 
 API messages are for developers: a user-facing French UI should map from the stable `code`.
 
+## Accounts and access control
+
+- `shared/api/deps.py` provides `CurrentAccount` and `get_authorized_shop`. Every shop route uses
+  `dependencies=[Depends(get_authorized_shop)]`. A foreign shop gives a 404, never a 403. Webhooks
+  stay public: they check their own signature.
+- `shared` cannot import `accounts`, so it declares `AccountAuthenticator` and `ShopOwnershipPort`,
+  implemented in `woassi/integration`. `DenyAllShopOwnership` refuses everything until the `shops`
+  module replaces it, so **every shop route answers 404 for now**.
+- Refresh tokens: only their SHA-256 is stored. `RefreshTokenStore.consume` is one atomic UPDATE.
+  Replaying a consumed token revokes its family; that revocation is committed before raising.
+  Password change and reset revoke every session of the account.
+- Verification codes are hashed with the password hasher. A failed attempt is committed before
+  raising, otherwise it would not count.
+- Login failures are neutral (`auth.invalid_credentials`), and timing too: use `dummy_verify` when
+  there is nothing to compare with. Reset requests answer 202 whether or not the phone exists.
+- Rate limits count failed logins only, as many users share an IP behind a mobile carrier's NAT.
+  `RateLimiter.hit` comes first, as it is atomic, and `forgive` gives the attempt back on success.
+- Access tokens cannot be revoked: they stay valid for up to 15 minutes after a logout.
+
 ## Pitfalls
 
 - **A module's api never imports `woassi.container`**: it imports every module, which breaks the
@@ -62,9 +118,15 @@ API messages are for developers: a user-facing French UI should map from the sta
   Every new model must be added there, otherwise Alembic will not see it.
 - After a hand-written migration, `uv run alembic check` must report no drift.
 - `ProductRepository.list` shadows the `list` builtin inside its class: annotate with `Sequence`.
+- The arq worker exits when Redis goes away and relies on `restart: unless-stopped`; `/health/ready`
+  only covers the API, so a dead worker does not show there.
 - `lint-imports` caches by mtime: use `--no-cache` when testing a contract by reverting a file.
 - Never log a WhatsApp message's sender or content. arq logs the repr of job arguments:
-  `MetaEvent` hides those fields (`repr=False`), so do not replace it with a dict.
+  `MetaEvent` hides those fields (`repr=False`), so do not replace it with a dict. The same goes
+  for any domain event carrying personal data and sent to a deferred subscriber.
+- `AuditLog.list` also shadows the builtin; same fix as `ProductRepository.list`.
+- A Protocol the api needs goes in `application/facade.py`, including for `shared`
+  (`SharedUseCases`), so a new shared use case also goes in `Container`.
 
 ## MinIO storage
 
@@ -82,6 +144,6 @@ Object keys:
 
 ## Current state
 
-Only `catalog` and `messaging` contain code. `accounts`, `shops`, `customers`, `orders`, `billing`
-and `payments` are empty packages. No real authentication: see the TODOs in `shared/api/deps.py`.
-No calls to Meta or the payment aggregator.
+`accounts`, `catalog` and `messaging` contain code. `shops`, `customers`, `orders`, `billing` and
+`payments` are empty packages. Codes are only written to the logs (`LogVerificationCodeSender`, dev
+only). No calls to Meta or the payment aggregator.

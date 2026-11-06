@@ -1,9 +1,9 @@
 from collections.abc import Sequence
-from types import TracebackType
-from typing import Protocol, Self
+from typing import Protocol
 from uuid import UUID
 
 from woassi.modules.catalog.domain.product import Product
+from woassi.shared.application.ports import UnitOfWork
 
 
 class ProductRepository(Protocol):
@@ -15,25 +15,14 @@ class ProductRepository(Protocol):
 
     async def list(self, shop_id: UUID, offset: int, limit: int) -> Sequence[Product]: ...
 
+    async def count(self, shop_id: UUID) -> int: ...
+
     async def save(self, product: Product) -> None: ...
 
 
-class CatalogUnitOfWork(Protocol):
+class CatalogUnitOfWork(UnitOfWork, Protocol):
     @property
     def products(self) -> ProductRepository: ...
-
-    async def __aenter__(self) -> Self: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None: ...
-
-    async def commit(self) -> None: ...
-
-    async def rollback(self) -> None: ...
 
 
 class PhotoJobQueue(Protocol):

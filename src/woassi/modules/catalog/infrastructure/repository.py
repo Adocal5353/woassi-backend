@@ -1,13 +1,14 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from woassi.modules.catalog.domain.errors import ProductNotFound, RetailerIdAlreadyUsed
 from woassi.modules.catalog.domain.product import PhotoStatus, Product, ProductPhoto
 from woassi.modules.catalog.infrastructure.models import ProductModel, ProductPhotoModel
+from woassi.shared.domain.events import Entity
 from woassi.shared.domain.values import Amount
 
 
@@ -67,8 +68,9 @@ def _copy_product(product: Product, model: ProductModel) -> ProductModel:
 
 
 class SqlAlchemyProductRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, track: Callable[[Entity], None]) -> None:
         self._session = session
+        self._track = track
 
     async def add(self, product: Product) -> None:
         self._session.add(_copy_product(product, ProductModel()))
@@ -80,6 +82,7 @@ class SqlAlchemyProductRepository:
                     f"retailer_id {product.retailer_id} already exists in this shop."
                 ) from error
             raise
+        self._track(product)
 
     async def get(self, shop_id: UUID, product_id: UUID) -> Product | None:
         model = await self._session.scalar(
@@ -107,9 +110,16 @@ class SqlAlchemyProductRepository:
         )
         return [_to_domain(model) for model in models]
 
+    async def count(self, shop_id: UUID) -> int:
+        total = await self._session.scalar(
+            select(func.count()).select_from(ProductModel).where(ProductModel.shop_id == shop_id)
+        )
+        return total or 0
+
     async def save(self, product: Product) -> None:
         model = await self._session.get(ProductModel, product.id)
         if model is None:
             raise ProductNotFound(f"Product {product.id} not found.")
         _copy_product(product, model)
         await self._session.flush()
+        self._track(product)

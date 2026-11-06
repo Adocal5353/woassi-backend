@@ -1,4 +1,4 @@
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +16,11 @@ from woassi.modules.catalog.application.use_cases.products import (
     GetProduct,
     ListProducts,
 )
+from woassi.shared.api.deps import get_authorized_shop
+
+
+def allow_shop(shop_id: UUID) -> UUID:
+    return shop_id
 
 
 class FakeCatalog:
@@ -50,6 +55,7 @@ def catalog() -> FakeCatalog:
 def client(settings: Settings, catalog: FakeCatalog) -> TestClient:
     app = create_app(settings)
     app.dependency_overrides[get_catalog] = lambda: catalog
+    app.dependency_overrides[get_authorized_shop] = allow_shop
     return TestClient(app)
 
 
@@ -68,7 +74,12 @@ def test_create_list_get(client: TestClient) -> None:
     assert created.json()["price"] == 5000
     assert created.json()["photos"] == []
 
-    assert client.get(base).json() == [created.json()]
+    assert client.get(base).json() == {
+        "items": [created.json()],
+        "total": 1,
+        "offset": 0,
+        "limit": 50,
+    }
     assert client.get(f"{base}/{created.json()['id']}").json() == created.json()
 
 

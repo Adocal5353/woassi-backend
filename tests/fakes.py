@@ -1,16 +1,26 @@
 """In-memory fake adapters for testing use cases without I/O."""
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from types import TracebackType
-from typing import Self
-from uuid import UUID
+from typing import Any, Self
+from uuid import UUID, uuid4
 
+from woassi.modules.accounts.domain.account import Account
+from woassi.modules.accounts.domain.errors import PhoneAlreadyUsed
+from woassi.modules.accounts.domain.refresh_token import RefreshToken
+from woassi.modules.accounts.domain.verification_code import CodePurpose, VerificationCode
 from woassi.modules.catalog.domain.errors import UnreadableImage
 from woassi.modules.catalog.domain.product import Product
 from woassi.modules.messaging.domain.event import MetaEvent
-from woassi.shared.application.ports import ObjectInfo
+from woassi.shared.application.ports import IdempotencyRecord, ObjectInfo, StoredResponse
+from woassi.shared.domain.audit import AuditEntry
 from woassi.shared.domain.errors import ObjectNotFound
+from woassi.shared.domain.events import DomainEvent, Entity
+from woassi.shared.domain.values import PhoneNumber
 
 
 class FakeStorage:
@@ -67,8 +77,65 @@ class FakeProductRepository:
         products = [p for p in self.products.values() if p.shop_id == shop_id]
         return deepcopy(products[offset : offset + limit])
 
+    async def count(self, shop_id: UUID) -> int:
+        return len([p for p in self.products.values() if p.shop_id == shop_id])
+
     async def save(self, product: Product) -> None:
         self.pending[product.id] = deepcopy(product)
+
+
+class FakeAuditLog:
+    def __init__(self) -> None:
+        self.entries: list[AuditEntry] = []
+
+    async def record(
+        self,
+        *,
+        account_id: UUID,
+        action: str,
+        target_type: str,
+        target_id: str,
+        shop_id: UUID | None = None,
+        details: Mapping[str, Any] | None = None,
+        ip: str | None = None,
+    ) -> None:
+        self.entries.append(
+            AuditEntry(
+                id=uuid4(),
+                account_id=account_id,
+                shop_id=shop_id,
+                action=action,
+                target_type=target_type,
+                target_id=target_id,
+                details=details or {},
+                ip=ip,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+
+    async def list(self, shop_id: UUID, offset: int, limit: int) -> Sequence[AuditEntry]:
+        entries = [e for e in self.entries if e.shop_id == shop_id]
+        return entries[offset : offset + limit]
+
+    async def count(self, shop_id: UUID) -> int:
+        return len([e for e in self.entries if e.shop_id == shop_id])
+
+
+class FakeIdempotencyStore:
+    def __init__(self) -> None:
+        self.records: dict[str, IdempotencyRecord] = {}
+
+    async def begin(self, key: str, fingerprint: str) -> IdempotencyRecord | None:
+        if key in self.records:
+            return self.records[key]
+        self.records[key] = IdempotencyRecord(fingerprint, None)
+        return None
+
+    async def complete(self, key: str, fingerprint: str, response: StoredResponse) -> None:
+        self.records[key] = IdempotencyRecord(fingerprint, response)
+
+    async def release(self, key: str) -> None:
+        self.records.pop(key, None)
 
 
 class FakeUoW:
@@ -76,10 +143,15 @@ class FakeUoW:
 
     def __init__(self) -> None:
         self.repository = FakeProductRepository()
+        self.audit_log = FakeAuditLog()
 
     @property
     def products(self) -> FakeProductRepository:
         return self.repository
+
+    @property
+    def audit(self) -> FakeAuditLog:
+        return self.audit_log
 
     async def __aenter__(self) -> Self:
         return self
@@ -124,3 +196,193 @@ class FakeEventQueue:
 
     async def enqueue(self, event: MetaEvent) -> None:
         self.events.append(event)
+
+
+@dataclass
+class AccountsState:
+    accounts: dict[UUID, Account] = field(default_factory=dict)
+    tokens: dict[UUID, RefreshToken] = field(default_factory=dict)
+    codes: dict[UUID, VerificationCode] = field(default_factory=dict)
+
+
+class FakeAccountRepository:
+    def __init__(self, uow: "FakeAccountsUoW") -> None:
+        self._uow = uow
+
+    async def add(self, account: Account) -> None:
+        if await self.get_by_phone(account.phone) is not None:
+            raise PhoneAlreadyUsed("This phone number is already registered.")
+        self._store(account)
+
+    def _store(self, account: Account) -> None:
+        # Like a database row, the stored copy carries no pending event.
+        stored = deepcopy(account)
+        stored.pull_events()
+        self._uow.state.accounts[account.id] = stored
+        self._uow.track(account)
+
+    async def get(self, account_id: UUID) -> Account | None:
+        return deepcopy(self._uow.state.accounts.get(account_id))
+
+    async def get_by_phone(self, phone: PhoneNumber) -> Account | None:
+        for account in self._uow.state.accounts.values():
+            if account.phone == phone:
+                return deepcopy(account)
+        return None
+
+    async def save(self, account: Account) -> None:
+        self._store(account)
+
+
+class FakeRefreshTokenStore:
+    def __init__(self, uow: "FakeAccountsUoW") -> None:
+        self._uow = uow
+
+    async def add(self, token: RefreshToken) -> None:
+        self._uow.state.tokens[token.id] = token
+
+    async def get_by_hash(self, token_hash: str) -> RefreshToken | None:
+        for token in self._uow.state.tokens.values():
+            if token.token_hash == token_hash:
+                return token
+        return None
+
+    async def consume(self, token_id: UUID, now: datetime) -> bool:
+        token = self._uow.state.tokens[token_id]
+        if token.consumed_at or token.revoked_at:
+            return False
+        self._uow.state.tokens[token_id] = replace(token, consumed_at=now)
+        return True
+
+    def _revoke(self, now: datetime, *ids: UUID) -> None:
+        for token_id in ids:
+            token = self._uow.state.tokens[token_id]
+            if token.revoked_at is None:
+                self._uow.state.tokens[token_id] = replace(token, revoked_at=now)
+
+    async def revoke(self, token_id: UUID, now: datetime) -> None:
+        self._revoke(now, token_id)
+
+    async def revoke_family(self, family_id: UUID, now: datetime) -> None:
+        tokens = self._uow.state.tokens.values()
+        self._revoke(now, *[t.id for t in tokens if t.family_id == family_id])
+
+    async def revoke_all(self, account_id: UUID, now: datetime) -> None:
+        tokens = self._uow.state.tokens.values()
+        self._revoke(now, *[t.id for t in tokens if t.account_id == account_id])
+
+
+class FakeVerificationCodeStore:
+    def __init__(self, uow: "FakeAccountsUoW") -> None:
+        self._uow = uow
+
+    async def add(self, code: VerificationCode) -> None:
+        self._uow.state.codes[code.id] = deepcopy(code)
+
+    async def get_latest(self, account_id: UUID, purpose: CodePurpose) -> VerificationCode | None:
+        codes = [
+            code
+            for code in self._uow.state.codes.values()
+            if code.account_id == account_id and code.purpose is purpose
+        ]
+        return deepcopy(codes[-1]) if codes else None
+
+    async def save(self, code: VerificationCode) -> None:
+        self._uow.state.codes[code.id] = deepcopy(code)
+
+    async def invalidate(self, account_id: UUID, purpose: CodePurpose, now: datetime) -> None:
+        for code in self._uow.state.codes.values():
+            if code.account_id == account_id and code.purpose is purpose and not code.consumed_at:
+                code.consume(now)
+
+
+class FakeAccountsUoW:
+    """Works on a copy of the database: what is not committed disappears, like a rollback."""
+
+    def __init__(self, database: AccountsState, events: list[DomainEvent]) -> None:
+        self.database = database
+        self.state = deepcopy(database)
+        self.events = events
+        self.tracked: list[Entity] = []
+        self.audit_log = FakeAuditLog()
+
+    @property
+    def accounts(self) -> FakeAccountRepository:
+        return FakeAccountRepository(self)
+
+    @property
+    def refresh_tokens(self) -> FakeRefreshTokenStore:
+        return FakeRefreshTokenStore(self)
+
+    @property
+    def verification_codes(self) -> FakeVerificationCodeStore:
+        return FakeVerificationCodeStore(self)
+
+    @property
+    def audit(self) -> FakeAuditLog:
+        return self.audit_log
+
+    def track(self, entity: Entity) -> None:
+        self.tracked.append(entity)
+
+    async def __aenter__(self) -> Self:
+        self.state = deepcopy(self.database)
+        self.tracked = []
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.rollback()
+
+    async def commit(self) -> None:
+        self.database.accounts = deepcopy(self.state.accounts)
+        self.database.tokens = deepcopy(self.state.tokens)
+        self.database.codes = deepcopy(self.state.codes)
+        for entity in self.tracked:
+            self.events.extend(entity.pull_events())
+        self.tracked = []
+
+    async def rollback(self) -> None:
+        self.state = deepcopy(self.database)
+        self.tracked = []
+
+
+class FakePasswordHasher:
+    """Instant and reversible: the real one takes 80 ms per call."""
+
+    async def hash(self, password: str) -> str:
+        return f"hashed:{password}"
+
+    async def verify(self, password: str, password_hash: str) -> bool:
+        return password_hash == f"hashed:{password}"
+
+    async def dummy_verify(self, password: str) -> None:
+        return None
+
+
+class FakeCodeSender:
+    def __init__(self) -> None:
+        self.sent: list[tuple[PhoneNumber, str, CodePurpose]] = []
+
+    async def send(self, phone: PhoneNumber, code: str, purpose: CodePurpose) -> None:
+        self.sent.append((phone, code, purpose))
+
+    @property
+    def last_code(self) -> str:
+        return self.sent[-1][1]
+
+
+class FakeRateLimiter:
+    def __init__(self) -> None:
+        self.counts: Counter[str] = Counter()
+
+    async def hit(self, key: str, limit: int, window_s: int) -> int | None:
+        self.counts[key] += 1
+        return None if self.counts[key] <= limit else window_s
+
+    async def forgive(self, key: str) -> None:
+        self.counts[key] -= 1

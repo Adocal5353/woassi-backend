@@ -1,20 +1,37 @@
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from woassi.shared.application.facade import SharedUseCases
+from woassi.shared.application.ports import AuthenticatedAccount
+from woassi.shared.domain.errors import ShopNotFound, Unauthorized
+
+_bearer = HTTPBearer(auto_error=False)
 
 
-async def get_current_account() -> None:
-    """TODO(auth): read the JWT and return the current Account; 401 if missing or invalid."""
-    return None
+def get_shared(request: Request) -> SharedUseCases:
+    return cast(SharedUseCases, request.app.state.container)
 
 
-async def verify_shop_access(
-    shop_id: UUID,
-    account: Annotated[None, Depends(get_current_account)],
-) -> UUID:
-    """TODO(auth): check that the shop belongs to the current account; 403 otherwise.
+SharedDep = Annotated[SharedUseCases, Depends(get_shared)]
 
-    Until this check exists, anyone can access any shop.
-    """
+
+async def get_current_account(
+    shared: SharedDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> AuthenticatedAccount:
+    if credentials is None:
+        raise Unauthorized("Authentication required.")
+    return await shared.account_authenticator().authenticate(credentials.credentials)
+
+
+CurrentAccount = Annotated[AuthenticatedAccount, Depends(get_current_account)]
+
+
+async def get_authorized_shop(shop_id: UUID, account: CurrentAccount, shared: SharedDep) -> UUID:
+    """404 rather than 403: a stranger must not learn that the shop exists."""
+    if not await shared.shop_ownership().owns(account.id, shop_id):
+        raise ShopNotFound(f"Shop {shop_id} not found.")
     return shop_id

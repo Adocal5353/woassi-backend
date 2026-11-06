@@ -11,10 +11,17 @@ Requirements: [uv](https://docs.astral.sh/uv/) and Docker.
 ```bash
 cp .env.example .env
 uv sync
+# Generate the encryption key and paste it into WOASSI_ENCRYPTION_KEY in .env
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Generate the JWT secret and paste it into JWT_SECRET in .env
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up -d          # api, worker, postgres, redis, minio, minio-init
 uv run alembic upgrade head
 curl localhost:8000/health
 ```
+
+`curl localhost:8000/health/ready` also checks Postgres, Redis and MinIO, and answers 503 if one
+of them is down.
 
 API docs: <http://localhost:8000/docs>. MinIO console: <http://localhost:9001>.
 
@@ -39,6 +46,41 @@ uv run mypy src
 ```
 
 To run them on every commit: `uv run pre-commit install`.
+
+## Authentication
+
+```bash
+curl -X POST localhost:8000/auth/register -H 'Content-Type: application/json' \
+  -d '{"full_name": "Ama", "phone": "90 12 34 56", "password": "correct-horse"}'
+docker compose logs api | grep verification_code    # in dev, the code goes to the logs
+curl -X POST localhost:8000/auth/verify -H 'Content-Type: application/json' \
+  -d '{"phone": "90 12 34 56", "code": "<code>"}'
+curl -X POST localhost:8000/auth/login -H 'Content-Type: application/json' \
+  -d '{"phone": "90 12 34 56", "password": "correct-horse"}'
+```
+
+The access token lasts 15 minutes and goes in `Authorization: Bearer`. The refresh token lasts 30
+days, works once, and is returned both in the body and in an httpOnly cookie on `/auth`. A browser
+client must not send two refreshes at once: replaying a consumed token ends the session.
+
+Outside `APP_ENV=dev` the application refuses to start until a real code sender exists.
+
+Behind a reverse proxy, configure uvicorn's `--forwarded-allow-ips`. Otherwise every client appears
+under the proxy's IP and they all share one login rate limit.
+
+## Encryption keys
+
+Shop secrets (Meta tokens, aggregator credentials) are encrypted with Fernet. The API and the
+worker refuse to start without a key.
+
+To rotate, generate a new key and list it first, as the first key encrypts and all of them decrypt:
+
+```bash
+WOASSI_ENCRYPTION_KEYS=<new key>,<old key>
+```
+
+Once stored values are re-encrypted (`FernetSecretCipher.rotate`), remove the old key. Losing all
+the keys means losing the secrets: store them in a secrets manager, never in the repository.
 
 ## Troubleshooting
 

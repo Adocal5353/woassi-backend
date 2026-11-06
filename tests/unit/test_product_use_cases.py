@@ -42,7 +42,8 @@ async def test_only_ready_photos_have_urls() -> None:
     product.add_photo(content_type="image/jpeg")
     uow.repository.products[product.id] = product
 
-    [view] = await ListProducts(uow, images).execute(shop_id=product.shop_id, offset=0, limit=10)
+    page = await ListProducts(uow, images).execute(shop_id=product.shop_id, offset=0, limit=10)
+    [view] = page.items
 
     assert view.photos[0].status is PhotoStatus.READY
     assert view.photos[0].urls == {400: "http://images/a_400.webp"}

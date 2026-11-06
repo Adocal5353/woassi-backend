@@ -1,7 +1,6 @@
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
 from woassi.modules.catalog.api.deps import CatalogDep
 from woassi.modules.catalog.api.schemas import (
@@ -10,12 +9,13 @@ from woassi.modules.catalog.api.schemas import (
     UploadUrlRequest,
     UploadUrlResponse,
 )
-from woassi.shared.api.deps import verify_shop_access
+from woassi.shared.api.deps import get_authorized_shop
+from woassi.shared.api.pagination import Limit, Offset, Page
 
 router = APIRouter(
     prefix="/shops/{shop_id}/products",
     tags=["catalog"],
-    dependencies=[Depends(verify_shop_access)],
+    dependencies=[Depends(get_authorized_shop)],
 )
 
 
@@ -29,13 +29,10 @@ async def create_product(
 
 @router.get("")
 async def list_products(
-    shop_id: UUID,
-    catalog: CatalogDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[ProductResponse]:
-    products = await catalog.list_products().execute(shop_id=shop_id, offset=offset, limit=limit)
-    return [ProductResponse.from_view(product) for product in products]
+    shop_id: UUID, catalog: CatalogDep, offset: Offset = 0, limit: Limit = 50
+) -> Page[ProductResponse]:
+    result = await catalog.list_products().execute(shop_id=shop_id, offset=offset, limit=limit)
+    return Page[ProductResponse].from_result(result, ProductResponse.from_view)
 
 
 @router.get("/{product_id}")

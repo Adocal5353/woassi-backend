@@ -1,6 +1,9 @@
+import re
 from dataclasses import dataclass
 
 from woassi.shared.domain.errors import InvalidData
+
+E164 = re.compile(r"\+[1-9]\d{6,14}")
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -23,3 +26,17 @@ class Amount:
 
     def __str__(self) -> str:
         return f"{self.value:,} FCFA".replace(",", " ")
+
+
+@dataclass(frozen=True, slots=True)
+class PhoneNumber:
+    """Phone number in E.164 format. Parsing free-form input is PhoneNormalizer's job."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not E164.fullmatch(self.value):
+            raise InvalidData("A phone number must be in E.164 format.", code="phone.invalid")
+
+    def __str__(self) -> str:
+        return self.value

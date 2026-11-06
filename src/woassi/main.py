@@ -6,9 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from woassi.config import Settings, get_settings
 from woassi.container import Container
+from woassi.modules.accounts.api.router import auth_router, me_router
 from woassi.modules.catalog.api.router import router as catalog_router
 from woassi.modules.messaging.api.router import router as messaging_router
+from woassi.shared.api.audit import router as audit_router
 from woassi.shared.api.errors import register_error_handlers
+from woassi.shared.api.health import router as health_router
+from woassi.shared.api.idempotency import IdempotencyMiddleware
 from woassi.shared.infrastructure.logging import configure_logging, configure_sentry
 
 
@@ -32,15 +36,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
+        allow_credentials=True,  # the dashboard sends the refresh cookie
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(IdempotencyMiddleware)
     register_error_handlers(app)
 
-    @app.get("/health", tags=["system"])
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
-
+    app.include_router(health_router)
+    app.include_router(auth_router)
+    app.include_router(me_router)
+    app.include_router(audit_router)
     app.include_router(catalog_router)
     app.include_router(messaging_router)
     return app

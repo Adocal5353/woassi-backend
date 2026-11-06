@@ -1,6 +1,8 @@
 x-app: &app
   build: .
   image: woassi-api:dev
+  # The arq worker exits when Redis goes away: without this it would stay down silently.
+  restart: unless-stopped
   env_file: .env
   environment: &app-env
     # On the Compose network, services reach each other by name.

@@ -4,6 +4,7 @@ from woassi.modules.catalog.application.dto import ProductView, product_view
 from woassi.modules.catalog.application.ports import CatalogUnitOfWork
 from woassi.modules.catalog.domain.errors import ProductNotFound
 from woassi.modules.catalog.domain.product import Product
+from woassi.shared.application.pagination import PageResult
 from woassi.shared.application.ports import StoragePort
 from woassi.shared.domain.values import Amount
 
@@ -42,10 +43,16 @@ class ListProducts:
         self._uow = uow
         self._images = images
 
-    async def execute(self, *, shop_id: UUID, offset: int, limit: int) -> list[ProductView]:
+    async def execute(self, *, shop_id: UUID, offset: int, limit: int) -> PageResult[ProductView]:
         async with self._uow as uow:
             products = await uow.products.list(shop_id, offset, limit)
-        return [product_view(product, self._images) for product in products]
+            total = await uow.products.count(shop_id)
+        return PageResult(
+            items=[product_view(product, self._images) for product in products],
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
 
 
 class GetProduct:
