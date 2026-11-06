@@ -17,7 +17,7 @@ from woassi.modules.accounts.api.schemas import (
 )
 from woassi.modules.accounts.application.dto import TokenPair
 from woassi.modules.accounts.domain.errors import InvalidRefreshToken
-from woassi.shared.api.deps import CurrentAccount
+from woassi.shared.api.deps import CurrentAccount, client_ip
 
 COOKIE_NAME = "refresh_token"
 COOKIE_PATH = "/auth"
@@ -46,10 +46,6 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
 @auth_router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, accounts: AccountsDep) -> AccountResponse:
     account = await accounts.register().execute(**body.model_dump())
@@ -66,7 +62,7 @@ async def login(
     body: LoginRequest, request: Request, response: Response, accounts: AccountsDep
 ) -> TokenResponse:
     pair = await accounts.login().execute(
-        phone=body.phone, password=body.password, ip=_client_ip(request)
+        phone=body.phone, password=body.password, ip=client_ip(request)
     )
     _set_refresh_cookie(response, pair)
     return TokenResponse.from_pair(pair)

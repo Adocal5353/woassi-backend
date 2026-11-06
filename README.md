@@ -13,6 +13,7 @@ cp .env.example .env
 uv sync
 # Generate the encryption key and paste it into WOASSI_ENCRYPTION_KEY in .env
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Set META_APP_ID and META_APP_SECRET from the Meta App Dashboard
 # Generate the JWT secret and paste it into JWT_SECRET in .env
 uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up -d          # api, worker, postgres, redis, minio, minio-init
@@ -67,6 +68,30 @@ Outside `APP_ENV=dev` the application refuses to start until a real code sender 
 
 Behind a reverse proxy, configure uvicorn's `--forwarded-allow-ips`. Otherwise every client appears
 under the proxy's IP and they all share one login rate limit.
+
+## Connecting a WhatsApp number
+
+The dashboard runs Meta's Embedded Signup, then sends the result to
+`POST /shops/{shop_id}/whatsapp/connect`. It needs:
+
+| Variable             | Used by   | Purpose                                                       |
+| -------------------- | --------- | ------------------------------------------------------------- |
+| `META_APP_ID`        | API       | exchanges the signup code, checks tokens                      |
+| `META_APP_SECRET`    | API       | same, and signs webhooks                                      |
+| `META_CONFIG_ID`     | dashboard | Facebook Login for Business configuration passed to `FB.login` |
+| `META_GRAPH_VERSION` | API       | Graph API version, `v27.0`                                    |
+
+On the dashboard side:
+
+- use Embedded Signup v4 or later, as v2 and v3 are deprecated. On v4, set
+  `featureType: "whatsapp_business_app_onboarding"` in `extras`; it is the default on v5;
+- send `code`, `waba_id` and `phone_number_id`, plus `catalog_id` if the event has `catalog_ids`.
+
+In the Meta App Dashboard, subscribe the webhook to `messages`, `account_update`, `history`,
+`smb_app_state_sync` and `smb_message_echoes`.
+
+A shop goes `ACTIVE` once its number is `CONNECTED`. A worker job checks every token daily at 03:00
+UTC.
 
 ## Encryption keys
 

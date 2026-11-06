@@ -38,6 +38,12 @@ class RateLimited(DomainError):
         self.retry_after_s = retry_after_s
 
 
+class UpstreamError(DomainError):
+    """A third party failed: the request was fine, so this is neither 4xx nor a bug."""
+
+    code = "upstream_error"
+
+
 class ObjectNotFound(NotFound):
     """Object missing from storage."""
 

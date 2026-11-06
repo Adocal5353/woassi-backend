@@ -18,7 +18,7 @@ class AuditEntryModel(Base):
     __table_args__ = (Index("ix_audit_log_shop_id_created_at", "shop_id", "created_at"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
-    # TODO: FK to accounts, and to shops once that module exists.
+    # No FK: modules stay independent, and shops and accounts are never physically deleted.
     account_id: Mapped[UUID]
     shop_id: Mapped[UUID | None]
     action: Mapped[str] = mapped_column(String(100))

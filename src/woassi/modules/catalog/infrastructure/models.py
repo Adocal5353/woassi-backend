@@ -28,7 +28,7 @@ class ProductModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
-    # TODO: FK to shops once that module exists.
+    # No FK: modules stay independent, and shops are archived, never deleted.
     shop_id: Mapped[UUID]
     name: Mapped[str] = mapped_column(String(200))
     price: Mapped[int] = mapped_column(BigInteger)

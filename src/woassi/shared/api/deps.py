@@ -27,6 +27,10 @@ async def get_current_account(
     return await shared.account_authenticator().authenticate(credentials.credentials)
 
 
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 CurrentAccount = Annotated[AuthenticatedAccount, Depends(get_current_account)]
 
 

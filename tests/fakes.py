@@ -16,6 +16,8 @@ from woassi.modules.accounts.domain.verification_code import CodePurpose, Verifi
 from woassi.modules.catalog.domain.errors import UnreadableImage
 from woassi.modules.catalog.domain.product import Product
 from woassi.modules.messaging.domain.event import MetaEvent
+from woassi.modules.shops.domain.errors import PhoneNumberAlreadyConnected, SlugTaken
+from woassi.modules.shops.domain.shop import Shop, WhatsAppStatus
 from woassi.shared.application.ports import IdempotencyRecord, ObjectInfo, StoredResponse
 from woassi.shared.domain.audit import AuditEntry
 from woassi.shared.domain.errors import ObjectNotFound
@@ -386,3 +388,101 @@ class FakeRateLimiter:
 
     async def forgive(self, key: str) -> None:
         self.counts[key] -= 1
+
+
+class FakeShopRepository:
+    def __init__(self, uow: "FakeShopsUoW") -> None:
+        self._uow = uow
+
+    def _visible(self) -> list[Shop]:
+        return [s for s in self._uow.state.values() if s.archived_at is None]
+
+    def _store(self, shop: Shop) -> None:
+        stored = deepcopy(shop)
+        stored.pull_events()
+        self._uow.state[shop.id] = stored
+        self._uow.tracked.append(shop)
+
+    async def add(self, shop: Shop) -> None:
+        if any(other.slug == shop.slug for other in self._uow.state.values()):
+            raise SlugTaken(f"Slug {shop.slug} is taken.")
+        self._store(shop)
+
+    async def get(self, shop_id: UUID) -> Shop | None:
+        shop = self._uow.state.get(shop_id)
+        return deepcopy(shop) if shop and shop.archived_at is None else None
+
+    async def get_by_phone_number_id(self, phone_number_id: str) -> Shop | None:
+        for shop in self._visible():
+            if shop.whatsapp and shop.whatsapp.phone_number_id == phone_number_id:
+                return deepcopy(shop)
+        return None
+
+    async def list(self, account_id: UUID, offset: int, limit: int) -> Sequence[Shop]:
+        shops = [s for s in self._visible() if s.account_id == account_id]
+        return deepcopy(shops[offset : offset + limit])
+
+    async def count(self, account_id: UUID) -> int:
+        return len([s for s in self._visible() if s.account_id == account_id])
+
+    async def list_connected(self) -> Sequence[Shop]:
+        return deepcopy(
+            [
+                shop
+                for shop in self._visible()
+                if shop.whatsapp and shop.whatsapp.status is WhatsAppStatus.CONNECTED
+            ]
+        )
+
+    async def save(self, shop: Shop) -> None:
+        number = shop.whatsapp.phone_number_id if shop.whatsapp else None
+        for other in self._uow.state.values():
+            other_number = other.whatsapp.phone_number_id if other.whatsapp else None
+            if other.id != shop.id and number and other_number == number:
+                raise PhoneNumberAlreadyConnected("Taken.")
+        self._store(shop)
+
+
+class FakeShopsUoW:
+    """Works on a copy of the database: what is not committed disappears, like a rollback."""
+
+    def __init__(
+        self, database: dict[UUID, Shop], events: list[DomainEvent], audit_log: FakeAuditLog
+    ) -> None:
+        self.database = database
+        self.state = deepcopy(database)
+        self.events = events
+        self.audit_log = audit_log
+        self.tracked: list[Entity] = []
+
+    @property
+    def shops(self) -> FakeShopRepository:
+        return FakeShopRepository(self)
+
+    @property
+    def audit(self) -> FakeAuditLog:
+        return self.audit_log
+
+    async def __aenter__(self) -> Self:
+        self.state = deepcopy(self.database)
+        self.tracked = []
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.rollback()
+
+    async def commit(self) -> None:
+        self.database.clear()
+        self.database.update(deepcopy(self.state))
+        for entity in self.tracked:
+            self.events.extend(entity.pull_events())
+        self.tracked = []
+
+    async def rollback(self) -> None:
+        self.state = deepcopy(self.database)
+        self.tracked = []

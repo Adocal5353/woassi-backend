@@ -2,6 +2,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from arq import cron
 from arq.connections import RedisSettings
 
 from woassi.config import get_settings
@@ -42,8 +43,14 @@ async def dispatch_event(ctx: dict[str, Any], subscriber: str, event: DomainEven
     await ctx["container"].event_bus.dispatch(subscriber, event)
 
 
+async def check_whatsapp_tokens(ctx: dict[str, Any]) -> None:
+    invalid = await ctx["container"].check_whatsapp_tokens().execute()
+    log.info("whatsapp_tokens_checked", invalid=invalid)
+
+
 class WorkerSettings:
     functions = (process_photo, process_meta_event, dispatch_event)
+    cron_jobs = (cron(check_whatsapp_tokens, hour=3, minute=0, timeout=3600),)
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

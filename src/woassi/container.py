@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+import httpx
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from minio import Minio
@@ -9,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from woassi.config import Settings
 from woassi.integration.accounts import AccountsAuthenticator
-from woassi.integration.shops import DenyAllShopOwnership
+from woassi.integration.images import CatalogLogoProcessor
+from woassi.integration.shops import ShopsLookup, ShopsOwnership
 from woassi.modules.accounts.application.facade import AccountsUseCases
 from woassi.modules.accounts.application.ports import (
     AccountsUnitOfWork,
@@ -54,12 +56,42 @@ from woassi.modules.catalog.infrastructure.image_processor import PillowImagePro
 from woassi.modules.catalog.infrastructure.photo_queue import ArqPhotoJobQueue
 from woassi.modules.catalog.infrastructure.uow import SqlAlchemyCatalogUoW
 from woassi.modules.messaging.application.facade import MessagingUseCases
-from woassi.modules.messaging.application.ports import EventQueue
+from woassi.modules.messaging.application.ports import EventQueue, ShopByPhoneNumberPort
 from woassi.modules.messaging.application.use_cases.webhook import (
     ReceiveMetaWebhook,
     VerifyMetaSubscription,
 )
 from woassi.modules.messaging.infrastructure.event_queue import ArqEventQueue
+from woassi.modules.shops.application.facade import ShopsUseCases
+from woassi.modules.shops.application.ports import (
+    LogoProcessor,
+    MetaOnboardingPort,
+    ShopsUnitOfWork,
+)
+from woassi.modules.shops.application.use_cases.logo import ConfirmLogo, RequestLogoUpload
+from woassi.modules.shops.application.use_cases.receiving_account import (
+    DeleteReceivingAccount,
+    GetReceivingAccount,
+    SetReceivingAccount,
+)
+from woassi.modules.shops.application.use_cases.settings import GetSettings, ReplaceSettings
+from woassi.modules.shops.application.use_cases.shops import (
+    ArchiveShop,
+    CheckShopOwnership,
+    CreateShop,
+    GetShop,
+    ListShops,
+    ResolveShopByPhoneNumber,
+    UpdateShop,
+)
+from woassi.modules.shops.application.use_cases.whatsapp import (
+    CheckWhatsAppTokens,
+    ConnectWhatsApp,
+    DisconnectWhatsApp,
+    GetWhatsApp,
+)
+from woassi.modules.shops.infrastructure.meta_onboarding import HttpxMetaOnboarding
+from woassi.modules.shops.infrastructure.uow import SqlAlchemyShopsUoW
 from woassi.shared.application.audit import ListAuditEntries
 from woassi.shared.application.facade import SharedUseCases
 from woassi.shared.application.ports import (
@@ -105,7 +137,9 @@ def _code_sender(settings: Settings) -> VerificationCodeSender:
 
 
 @dataclass
-class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseCases):
+class Container(
+    AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseCases, ShopsUseCases
+):
     settings: Settings
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -116,6 +150,7 @@ class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseC
     cipher: SecretCipher
     hasher: PasswordHasher
     code_sender: VerificationCodeSender
+    http: httpx.AsyncClient
     uploads: StoragePort
     product_images: StoragePort
     documents: StoragePort
@@ -137,6 +172,7 @@ class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseC
             cipher=FernetSecretCipher(settings.encryption_keys),
             hasher=Argon2PasswordHasher(),
             code_sender=_code_sender(settings),
+            http=httpx.AsyncClient(timeout=15),
             uploads=MinioStorage(client, signer, settings.minio_bucket_uploads),
             product_images=MinioStorage(
                 client,
@@ -153,6 +189,7 @@ class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseC
         """Bind domain events to their subscribers, in the API and in the worker alike."""
 
     async def close(self) -> None:
+        await self.http.aclose()
         await self.arq.aclose()
         await self.engine.dispose()
 
@@ -173,7 +210,24 @@ class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseC
         return AccountsAuthenticator(self.authenticate_account())
 
     def shop_ownership(self) -> ShopOwnershipPort:
-        return DenyAllShopOwnership()
+        return ShopsOwnership(CheckShopOwnership(self.shops_uow()))
+
+    def shops_uow(self) -> ShopsUnitOfWork:
+        return SqlAlchemyShopsUoW(self.sessions, self.event_bus, self.clock)
+
+    def meta_onboarding(self) -> MetaOnboardingPort:
+        return HttpxMetaOnboarding(
+            self.http,
+            app_id=self.settings.meta_app_id,
+            app_secret=self.settings.meta_app_secret,
+            graph_version=self.settings.meta_graph_version,
+        )
+
+    def logo_processor(self) -> LogoProcessor:
+        return CatalogLogoProcessor(self.image_processor())
+
+    def shop_by_phone_number(self) -> ShopByPhoneNumberPort:
+        return ShopsLookup(ResolveShopByPhoneNumber(self.shops_uow(), self.cipher))
 
     def catalog_uow(self) -> CatalogUnitOfWork:
         return SqlAlchemyCatalogUoW(self.sessions, self.event_bus, self.clock)
@@ -256,6 +310,57 @@ class Container(AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseC
 
     def authenticate_account(self) -> AuthenticateAccount:
         return AuthenticateAccount(self.accounts_uow(), self.token_service())
+
+    # Use cases: shops
+    def create_shop(self) -> CreateShop:
+        return CreateShop(self.shops_uow, self.product_images, self.clock)
+
+    def list_shops(self) -> ListShops:
+        return ListShops(self.shops_uow(), self.product_images)
+
+    def get_shop(self) -> GetShop:
+        return GetShop(self.shops_uow(), self.product_images)
+
+    def update_shop(self) -> UpdateShop:
+        return UpdateShop(self.shops_uow(), self.product_images)
+
+    def archive_shop(self) -> ArchiveShop:
+        return ArchiveShop(self.shops_uow(), self.meta_onboarding(), self.cipher, self.clock)
+
+    def get_settings(self) -> GetSettings:
+        return GetSettings(self.shops_uow())
+
+    def replace_settings(self) -> ReplaceSettings:
+        return ReplaceSettings(self.shops_uow(), self.phone_normalizer())
+
+    def connect_whatsapp(self) -> ConnectWhatsApp:
+        return ConnectWhatsApp(self.shops_uow(), self.meta_onboarding(), self.cipher, self.clock)
+
+    def get_whatsapp(self) -> GetWhatsApp:
+        return GetWhatsApp(self.shops_uow())
+
+    def disconnect_whatsapp(self) -> DisconnectWhatsApp:
+        return DisconnectWhatsApp(self.shops_uow(), self.meta_onboarding(), self.cipher)
+
+    def check_whatsapp_tokens(self) -> CheckWhatsAppTokens:
+        return CheckWhatsAppTokens(self.shops_uow(), self.meta_onboarding(), self.cipher)
+
+    def get_receiving_account(self) -> GetReceivingAccount:
+        return GetReceivingAccount(self.shops_uow(), self.cipher)
+
+    def set_receiving_account(self) -> SetReceivingAccount:
+        return SetReceivingAccount(self.shops_uow(), self.phone_normalizer(), self.cipher)
+
+    def delete_receiving_account(self) -> DeleteReceivingAccount:
+        return DeleteReceivingAccount(self.shops_uow())
+
+    def request_logo_upload(self) -> RequestLogoUpload:
+        return RequestLogoUpload(self.shops_uow(), self.uploads)
+
+    def confirm_logo(self) -> ConfirmLogo:
+        return ConfirmLogo(
+            self.shops_uow(), self.uploads, self.product_images, self.logo_processor()
+        )
 
     # Use cases: shared
     def list_audit_entries(self) -> ListAuditEntries:

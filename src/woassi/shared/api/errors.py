@@ -10,6 +10,7 @@ from woassi.shared.domain.errors import (
     NotFound,
     RateLimited,
     Unauthorized,
+    UpstreamError,
 )
 
 HTTP_STATUSES: tuple[tuple[type[DomainError], int], ...] = (
@@ -19,6 +20,7 @@ HTTP_STATUSES: tuple[tuple[type[DomainError], int], ...] = (
     (Unauthorized, status.HTTP_401_UNAUTHORIZED),
     (Forbidden, status.HTTP_403_FORBIDDEN),
     (RateLimited, status.HTTP_429_TOO_MANY_REQUESTS),
+    (UpstreamError, status.HTTP_502_BAD_GATEWAY),
 )
 
 

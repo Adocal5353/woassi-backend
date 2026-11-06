@@ -17,6 +17,7 @@ def settings() -> Settings:
         public_images_base_url="http://localhost:9000/woassi-products",
         meta_app_secret="app-secret",
         meta_verify_token="verify-token",
+        meta_app_id="app-id",
         jwt_secret="test-secret-of-at-least-32-characters",
         woassi_encryption_key="not-used-without-the-container",
     )

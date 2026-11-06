@@ -94,9 +94,8 @@ API messages are for developers: a user-facing French UI should map from the sta
 - `shared/api/deps.py` provides `CurrentAccount` and `get_authorized_shop`. Every shop route uses
   `dependencies=[Depends(get_authorized_shop)]`. A foreign shop gives a 404, never a 403. Webhooks
   stay public: they check their own signature.
-- `shared` cannot import `accounts`, so it declares `AccountAuthenticator` and `ShopOwnershipPort`,
-  implemented in `woassi/integration`. `DenyAllShopOwnership` refuses everything until the `shops`
-  module replaces it, so **every shop route answers 404 for now**.
+- `shared` cannot import `accounts` or `shops`, so it declares `AccountAuthenticator` and
+  `ShopOwnershipPort`, implemented in `woassi/integration`.
 - Refresh tokens: only their SHA-256 is stored. `RefreshTokenStore.consume` is one atomic UPDATE.
   Replaying a consumed token revokes its family; that revocation is committed before raising.
   Password change and reset revoke every session of the account.
@@ -107,6 +106,23 @@ API messages are for developers: a user-facing French UI should map from the sta
 - Rate limits count failed logins only, as many users share an IP behind a mobile carrier's NAT.
   `RateLimiter.hit` comes first, as it is atomic, and `forgive` gives the attempt back on success.
 - Access tokens cannot be revoked: they stay valid for up to 15 minutes after a logout.
+
+## Shops and WhatsApp
+
+- `Shop` is an aggregate: settings, WhatsApp account and receiving account load and save with it.
+  `ShopRepository` hides archived shops, so `DELETE` leaves every route answering 404.
+- A shop is `ACTIVE` only with a `CONNECTED` number; losing the number sends it back to `DRAFT`.
+- `phone_number_id` comes from the browser. It is only written once Meta has confirmed it with the
+  merchant's token, otherwise anyone could squat someone else's number with a fake code.
+- Graph calls live in `shops/infrastructure/meta_onboarding.py`, each with a link to its doc, and
+  run outside any transaction. Check the doc again when changing `META_GRAPH_VERSION`.
+- **Graph secrets travel in query strings.** Never log a URL or an httpx exception. `httpx` logging
+  is silenced, Sentry's httpx integration is disabled, and `MetaError` carries no Meta text.
+- `MetaError` is only a shop failure when Meta says so: the daily token check ignores outages.
+- Coexistence: skip `POST /{phone}/register`, and `smb_app_data` works once per sync type, within
+  24 hours. Numbers not on `platform_type=CLOUD_API` are refused, as `/register` is not implemented.
+- A receiving account receives the money: changing its operator or number resets `verified`.
+- No FK across modules: it would tie them together, and shops and accounts are never deleted.
 
 ## Pitfalls
 
@@ -144,6 +160,7 @@ Object keys:
 
 ## Current state
 
-`accounts`, `catalog` and `messaging` contain code. `shops`, `customers`, `orders`, `billing` and
+`accounts`, `catalog`, `messaging` and `shops` contain code. `customers`, `orders`, `billing` and
 `payments` are empty packages. Codes are only written to the logs (`LogVerificationCodeSender`, dev
-only). No calls to Meta or the payment aggregator.
+only). The Graph API is only called for onboarding; no messages are sent. No calls to the payment
+aggregator.

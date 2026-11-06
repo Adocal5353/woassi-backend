@@ -15,7 +15,6 @@ from tests.fakes import (
 )
 from woassi.config import Settings
 from woassi.integration.accounts import AccountsAuthenticator
-from woassi.integration.shops import DenyAllShopOwnership
 from woassi.main import create_app
 from woassi.modules.accounts.api.deps import get_accounts
 from woassi.modules.accounts.application.use_cases.password import (
@@ -49,6 +48,11 @@ PHONE = "90 12 34 56"
 E164 = "+22890123456"
 PASSWORD = "correct-horse"
 THIRTY_DAYS = 30 * 24 * 3600
+
+
+class DenyAllShopOwnership:
+    async def owns(self, account_id: UUID, shop_id: UUID) -> bool:
+        return False
 
 
 class Stack:

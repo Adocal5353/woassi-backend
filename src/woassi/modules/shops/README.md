@@ -1,1 +1,1 @@
-# shops — An account's shops: WhatsApp account, settings and receiving account (mobile money).
+# shops — Shops of an account: settings, WhatsApp connection (Embedded Signup), receiving account and logo.

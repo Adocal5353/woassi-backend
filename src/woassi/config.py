@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     # min_length=1: an empty secret would let anyone forge the HMAC signature.
     meta_app_secret: str = Field(min_length=1)
     meta_verify_token: str = Field(min_length=1)
-    meta_graph_version: str = "v24.0"
+    meta_app_id: str = Field(min_length=1)
+    meta_config_id: str = ""  # used by the dashboard's Embedded Signup, not by this API
+    meta_graph_version: str = "v27.0"
 
     # min_length=32: HS256 is only as strong as this secret.
     jwt_secret: str = Field(min_length=32)

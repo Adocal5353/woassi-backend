@@ -9,6 +9,8 @@ from woassi.container import Container
 from woassi.modules.accounts.api.router import auth_router, me_router
 from woassi.modules.catalog.api.router import router as catalog_router
 from woassi.modules.messaging.api.router import router as messaging_router
+from woassi.modules.shops.api.router import account_router as shops_account_router
+from woassi.modules.shops.api.router import router as shops_router
 from woassi.shared.api.audit import router as audit_router
 from woassi.shared.api.errors import register_error_handlers
 from woassi.shared.api.health import router as health_router
@@ -46,6 +48,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(me_router)
+    app.include_router(shops_account_router)
+    app.include_router(shops_router)
     app.include_router(audit_router)
     app.include_router(catalog_router)
     app.include_router(messaging_router)
