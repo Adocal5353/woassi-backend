@@ -1,7 +1,15 @@
+from collections.abc import Sequence
+from uuid import UUID
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from woassi.modules.messaging.domain.outbound import OutboundMessage, OutboundStatus
-from woassi.modules.messaging.infrastructure.models import OutboundMessageModel
+from woassi.modules.messaging.domain.templates import MessageTemplate, TemplateStatus
+from woassi.modules.messaging.infrastructure.models import (
+    MessageTemplateModel,
+    OutboundMessageModel,
+)
 from woassi.shared.infrastructure.idempotency import claim_key
 
 
@@ -54,4 +62,47 @@ class SqlAlchemyOutboundMessages:
         if model is None:
             raise LookupError(f"Outbound message {message.id} does not exist.")
         _copy(message, model)
+        await self._session.flush()
+
+
+def _template(model: MessageTemplateModel) -> MessageTemplate:
+    return MessageTemplate(
+        shop_id=model.shop_id,
+        waba_id=model.waba_id,
+        name=model.name,
+        language=model.language,
+        status=TemplateStatus(model.status),
+        updated_at=model.updated_at,
+        meta_template_id=model.meta_template_id,
+    )
+
+
+class SqlAlchemyMessageTemplates:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, shop_id: UUID, name: str, language: str) -> MessageTemplate | None:
+        model = await self._session.get(MessageTemplateModel, (shop_id, name, language))
+        return _template(model) if model else None
+
+    async def list_by_waba(self, waba_id: str, name: str) -> Sequence[MessageTemplate]:
+        models = await self._session.scalars(
+            select(MessageTemplateModel).where(
+                MessageTemplateModel.waba_id == waba_id, MessageTemplateModel.name == name
+            )
+        )
+        return [_template(model) for model in models]
+
+    async def save(self, template: MessageTemplate) -> None:
+        key = (template.shop_id, template.name, template.language)
+        model = await self._session.get(MessageTemplateModel, key)
+        if model is None:
+            model = MessageTemplateModel(
+                shop_id=template.shop_id, name=template.name, language=template.language
+            )
+            self._session.add(model)
+        model.waba_id = template.waba_id
+        model.status = template.status.value
+        model.meta_template_id = template.meta_template_id
+        model.updated_at = template.updated_at
         await self._session.flush()

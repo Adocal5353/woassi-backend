@@ -378,9 +378,24 @@ def test_replace_settings(client: TestClient, shop_id: str) -> None:
     assert saved["invoice_details"]["trade_register"] == "RCCM"
 
 
+def test_order_settings(client: TestClient, shop_id: str) -> None:
+    defaults = client.get(f"/shops/{shop_id}/settings").json()
+    assert (defaults["language"], defaults["validation_mode"]) == ("fr", "MANUAL")
+    assert defaults["auto_validation_max_amount"] is None
+
+    body = {"language": "en", "validation_mode": "AUTOMATIC", "auto_validation_max_amount": 50000}
+    assert client.put(f"/shops/{shop_id}/settings", json=body).status_code == 200
+    saved = client.get(f"/shops/{shop_id}/settings").json()
+    assert (saved["language"], saved["validation_mode"]) == ("en", "AUTOMATIC")
+    assert saved["auto_validation_max_amount"] == 50000
+
+
 @pytest.mark.parametrize(
     "body",
     [
+        {"language": "ee"},
+        {"validation_mode": "SOMETIMES"},
+        {"auto_validation_max_amount": 0},
         {"payment_modes": []},
         {"payment_modes": ["CHEQUE"]},
         {"reminder_1_minutes": 90},

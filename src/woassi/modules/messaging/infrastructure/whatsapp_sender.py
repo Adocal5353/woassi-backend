@@ -69,6 +69,15 @@ def _content(content: MessageContent) -> dict[str, Any]:
                         ],
                     }
                 ]
+            for index, button_payload in enumerate(content.button_payloads):
+                template.setdefault("components", []).append(
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": str(index),
+                        "parameters": [{"type": "payload", "payload": button_payload}],
+                    }
+                )
             return {"type": "template", "template": template}
 
 

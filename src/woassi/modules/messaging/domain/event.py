@@ -45,4 +45,14 @@ class AccountUpdate:
     time: int | None = None
 
 
-type MetaEvent = InboundMessage | MessageStatusUpdate | AccountUpdate
+@dataclass(frozen=True, slots=True)
+class TemplateStatusUpdate:
+    """Meta reviewed, paused or disabled a message template of an account."""
+
+    waba_id: str
+    name: str
+    language: str
+    status: str
+
+
+type MetaEvent = InboundMessage | MessageStatusUpdate | AccountUpdate | TemplateStatusUpdate

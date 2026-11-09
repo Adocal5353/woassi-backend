@@ -6,11 +6,13 @@ from woassi.modules.messaging.application.ports import (
     ShopConnectionsPort,
     WhatsAppAccountsPort,
 )
+from woassi.modules.messaging.application.use_cases.templates import apply_template_status
 from woassi.modules.messaging.domain.event import (
     AccountUpdate,
     InboundMessage,
     MessageStatusUpdate,
     MetaEvent,
+    TemplateStatusUpdate,
 )
 from woassi.modules.messaging.domain.outbound import status_from_meta
 from woassi.shared.application.ports import Clock
@@ -52,6 +54,16 @@ class HandleMetaEvent:
                 await self._status(event)
             case AccountUpdate():
                 await self._account(event)
+            case TemplateStatusUpdate():
+                moved = await apply_template_status(self._uow, event, self._clock)
+                log.info(
+                    "template_status_updated",
+                    waba_id=event.waba_id,
+                    template=event.name,
+                    language=event.language,
+                    status=event.status,
+                    records=moved,
+                )
 
     async def _message(self, message: InboundMessage) -> None:
         async with self._uow as uow:

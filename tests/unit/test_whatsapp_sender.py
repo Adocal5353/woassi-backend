@@ -21,7 +21,7 @@ from woassi.shared.infrastructure.meta_graph import GraphClient
 TOKEN = "EAAG-a-recognizable-business-token"
 URL = "https://graph.facebook.com/v27.0/2002/messages"
 SHOP = ShopConnection(
-    shop_id=__import__("uuid").uuid4(), phone_number_id="2002", access_token=TOKEN
+    shop_id=__import__("uuid").uuid4(), waba_id="1001", phone_number_id="2002", access_token=TOKEN
 )
 BY_PHONE = Recipient(phone=PhoneNumber("+22890123456"))
 BY_USER_ID = Recipient(user_id="TG.13491208655302741918")

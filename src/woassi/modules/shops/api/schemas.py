@@ -12,9 +12,11 @@ from woassi.modules.shops.application.dto import (
 )
 from woassi.modules.shops.domain.shop import (
     InvoiceDetails,
+    Language,
     Operator,
     PaymentMode,
     ShopStatus,
+    ValidationMode,
     WhatsAppStatus,
 )
 
@@ -79,6 +81,9 @@ class SettingsBody(BaseModel):
     welcome_message: str = Field(default="", max_length=1024)
     invoice_details: InvoiceDetailsBody = InvoiceDetailsBody()
     invoice_prefix: str = "FAC"
+    language: Language = Language.FR
+    validation_mode: ValidationMode = ValidationMode.MANUAL
+    auto_validation_max_amount: int | None = Field(default=None, ge=1, le=1_000_000_000_000)
 
     @classmethod
     def from_view(cls, view: SettingsView) -> "SettingsBody":
@@ -98,6 +103,9 @@ class SettingsBody(BaseModel):
                 phone=details.phone,
             ),
             invoice_prefix=view.invoice_prefix,
+            language=view.language,
+            validation_mode=view.validation_mode,
+            auto_validation_max_amount=view.auto_validation_max_amount,
         )
 
     def to_arguments(self) -> dict[str, object]:

@@ -116,6 +116,21 @@ class SqlAlchemyProductRepository:
         )
         return total or 0
 
+    async def list_for_update(
+        self, shop_id: UUID, *, retailer_ids: Sequence[str] = (), ids: Sequence[UUID] = ()
+    ) -> Sequence[Product]:
+        # Always in id order: two orders locking the same products cannot deadlock.
+        models = await self._session.scalars(
+            select(ProductModel)
+            .where(
+                ProductModel.shop_id == shop_id,
+                ProductModel.retailer_id.in_(retailer_ids) | ProductModel.id.in_(ids),
+            )
+            .order_by(ProductModel.id)
+            .with_for_update(of=ProductModel)
+        )
+        return [_to_domain(model) for model in models]
+
     async def save(self, product: Product) -> None:
         model = await self._session.get(ProductModel, product.id)
         if model is None:

@@ -17,7 +17,7 @@ from woassi.shared.infrastructure.clock import FrozenClock
 pytestmark = pytest.mark.integration
 
 CLOCK = FrozenClock(datetime(2026, 1, 1, tzinfo=UTC))
-SHOP = ShopConnection(shop_id=uuid4(), phone_number_id="2002", access_token="token")
+SHOP = ShopConnection(shop_id=uuid4(), waba_id="1001", phone_number_id="2002", access_token="token")
 MESSAGE = InboundMessage(
     phone_number_id="2002", message_id="wamid.1", type="order", sender_user_id="TG.1"
 )

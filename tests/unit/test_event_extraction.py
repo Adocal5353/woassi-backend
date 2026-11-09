@@ -8,6 +8,7 @@ from woassi.modules.messaging.domain.event import (
     AccountUpdate,
     InboundMessage,
     MessageStatusUpdate,
+    TemplateStatusUpdate,
 )
 
 PHONE_ID = "106540352242922"
@@ -201,6 +202,22 @@ def test_other_fields_are_ignored(field: str) -> None:
     payload = messages(ORDER)
     payload["entry"][0]["changes"][0]["field"] = field
     assert extract_events(payload) == []
+
+
+def test_template_status() -> None:
+    value = {
+        "event": "APPROVED",
+        "message_template_id": 1689556908129832,
+        "message_template_name": "woassi_order_validation",
+        "message_template_language": "fr",
+        "reason": "NONE",
+    }
+    payload = webhook(value, "message_template_status_update", entry_id="1001")
+    assert extract_events(payload) == [
+        TemplateStatusUpdate(
+            waba_id="1001", name="woassi_order_validation", language="fr", status="APPROVED"
+        )
+    ]
 
 
 def test_routes_each_change_to_its_number() -> None:

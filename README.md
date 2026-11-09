@@ -90,14 +90,31 @@ On the dashboard side:
 In the Meta App Dashboard, under **WhatsApp > Configuration**:
 
 - callback URL: `https://<public host>/webhooks/meta`, verify token: `META_VERIFY_TOKEN`;
-- subscribe to `messages`, `account_update`, `history`, `smb_app_state_sync` and
-  `smb_message_echoes`.
+- subscribe to `messages`, `account_update`, `message_template_status_update`, `history`,
+  `smb_app_state_sync` and `smb_message_echoes`.
 
 Meta only calls public HTTPS URLs. In development, expose the API through a tunnel first, for
 instance `cloudflared tunnel --url http://localhost:8000`, and use the URL it prints.
 
 A shop goes `ACTIVE` once its number is `CONNECTED`. A worker job checks every token daily at 03:00
 UTC.
+
+## Orders
+
+A WhatsApp cart becomes an order, and its stock is reserved. The shop's settings decide what
+happens next:
+
+- `validation_mode`: `MANUAL` (default) asks the merchant on their `notification_number` with the
+  `woassi_order_validation` template; `AUTOMATIC` confirms at once, unless the total is above
+  `auto_validation_max_amount`;
+- `language`: `fr` or `en`, for the merchant and the customers;
+- reminders at 15 and 60 minutes, expiry after 24 hours (`reminder_*`, `expiration_hours`).
+
+If part of the cart is out of stock, the customer is offered the rest. The merchant can also
+decide from the dashboard: `POST /shops/{shop_id}/orders/{order_id}/accept` or `/refuse`.
+
+The template is submitted when a shop connects its number; until Meta approves it, which can
+take 24 hours, orders only wait in the dashboard.
 
 ## Encryption keys
 

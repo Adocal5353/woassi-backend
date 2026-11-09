@@ -92,8 +92,16 @@ class TemplateMessage:
     name: str
     language: str
     body_parameters: Mapping[str, str] = field(default_factory=dict, repr=False)
+    # Returned in the reply webhook when the user taps the quick reply button at that index.
+    button_payloads: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        for value in self.body_parameters.values():
+            # Meta refuses line breaks and tabs in template parameters.
+            if not value or "\n" in value or "\t" in value:
+                raise InvalidMessage("A template parameter must be one non-empty line.")
+        for button_payload in self.button_payloads:
+            _length(button_payload, MAX_BUTTON_ID, "A button payload")
         if not TEMPLATE_NAME.fullmatch(self.name):
             raise InvalidMessage("A template name takes lowercase letters, digits and _.")
         if not LANGUAGE.fullmatch(self.language):

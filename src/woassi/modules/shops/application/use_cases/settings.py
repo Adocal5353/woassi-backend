@@ -3,7 +3,13 @@ from uuid import UUID
 from woassi.modules.shops.application.dto import SettingsView, settings_view
 from woassi.modules.shops.application.ports import ShopsUnitOfWork
 from woassi.modules.shops.application.use_cases.support import load_shop
-from woassi.modules.shops.domain.shop import InvoiceDetails, PaymentMode, ShopSettings
+from woassi.modules.shops.domain.shop import (
+    InvoiceDetails,
+    Language,
+    PaymentMode,
+    ShopSettings,
+    ValidationMode,
+)
 from woassi.shared.application.ports import PhoneNormalizer
 
 
@@ -34,6 +40,9 @@ class ReplaceSettings:
         welcome_message: str,
         invoice_details: InvoiceDetails,
         invoice_prefix: str,
+        language: Language = Language.FR,
+        validation_mode: ValidationMode = ValidationMode.MANUAL,
+        auto_validation_max_amount: int | None = None,
     ) -> SettingsView:
         settings = ShopSettings(
             notification_number=(
@@ -46,6 +55,9 @@ class ReplaceSettings:
             welcome_message=welcome_message,
             invoice_details=invoice_details,
             invoice_prefix=invoice_prefix,
+            language=language,
+            validation_mode=validation_mode,
+            auto_validation_max_amount=auto_validation_max_amount,
         )
         async with self._uow as uow:
             shop = await load_shop(uow, shop_id)

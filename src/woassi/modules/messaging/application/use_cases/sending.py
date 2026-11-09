@@ -9,12 +9,14 @@ from woassi.modules.messaging.application.ports import (
     ShopConnectionsPort,
     WhatsAppSender,
 )
-from woassi.modules.messaging.domain.content import MessageContent, Recipient
+from woassi.modules.messaging.application.use_cases.templates import EnsureTemplateSendable
+from woassi.modules.messaging.domain.content import MessageContent, Recipient, TemplateMessage
 from woassi.modules.messaging.domain.errors import (
     InvalidRecipient,
     MessageNotSent,
     OutsideCustomerServiceWindow,
     ShopNotConnected,
+    TemplateNotApproved,
 )
 from woassi.modules.messaging.domain.outbound import OutboundMessage
 from woassi.shared.application.ports import Clock
@@ -41,11 +43,13 @@ class SendWhatsAppMessage:
         uow: MessagingUnitOfWork,
         shops: ShopConnectionsPort,
         sender: WhatsAppSender,
+        templates: EnsureTemplateSendable,
         clock: Clock,
     ) -> None:
         self._uow = uow
         self._shops = shops
         self._sender = sender
+        self._templates = templates
         self._clock = clock
 
     async def execute(
@@ -55,6 +59,12 @@ class SendWhatsAppMessage:
         connection = await self._shops.by_shop_id(shop_id)
         if connection is None:
             raise ShopNotConnected("This shop has no connected WhatsApp number.")
+        if isinstance(content, TemplateMessage) and not await self._templates.execute(
+            connection, content.name, content.language
+        ):
+            raise TemplateNotApproved(
+                f"Template {content.name} ({content.language}) is not approved for this shop."
+            )
         try:
             message_id = await self._sender.send(connection, recipient, content)
         except SendError as error:

@@ -4,6 +4,7 @@ https://developers.facebook.com/documentation/business-messaging/whatsapp/webhoo
 https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/status.md
 https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/account_update.md
 https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids.md
+https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/message_template_status_update.md
 """
 
 from collections.abc import Mapping, Sequence
@@ -14,6 +15,7 @@ from woassi.modules.messaging.domain.event import (
     InboundMessage,
     MessageStatusUpdate,
     MetaEvent,
+    TemplateStatusUpdate,
 )
 
 
@@ -111,11 +113,21 @@ def _account_change(entry: Mapping[str, Any], value: Mapping[str, Any]) -> list[
     return [AccountUpdate(waba_id=waba_id, event=event, time=_integer(entry.get("time")))]
 
 
+def _template_change(entry: Mapping[str, Any], value: Mapping[str, Any]) -> list[MetaEvent]:
+    waba_id = _text(entry.get("id"))
+    name = _text(value.get("message_template_name"))
+    language = _text(value.get("message_template_language"))
+    status = _text(value.get("event"))
+    if not (waba_id and name and language and status):
+        return []
+    return [TemplateStatusUpdate(waba_id=waba_id, name=name, language=language, status=status)]
+
+
 def extract_events(payload: Mapping[str, Any]) -> list[MetaEvent]:
     """Lenient: a malformed item is skipped so the rest of the batch is not lost.
 
-    Only the `messages` and `account_update` fields are read. The coexistence fields (`history`,
-    `smb_message_echoes`, `smb_app_state_sync`) are ignored for now.
+    Read fields: `messages`, `account_update` and `message_template_status_update`.
+    The coexistence ones (`history`, `smb_message_echoes`, `smb_app_state_sync`) are ignored.
     """
     events: list[MetaEvent] = []
     for entry in _mappings(payload.get("entry")):
@@ -127,4 +139,6 @@ def extract_events(payload: Mapping[str, Any]) -> list[MetaEvent]:
                 events.extend(_messages_change(value))
             elif change.get("field") == "account_update":
                 events.extend(_account_change(entry, value))
+            elif change.get("field") == "message_template_status_update":
+                events.extend(_template_change(entry, value))
     return events

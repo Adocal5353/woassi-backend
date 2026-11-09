@@ -52,9 +52,19 @@ async def check_whatsapp_tokens(ctx: dict[str, Any]) -> None:
     log.info("whatsapp_tokens_checked", invalid=invalid)
 
 
+async def process_due_orders(ctx: dict[str, Any]) -> None:
+    handled = await ctx["container"].process_due_orders().execute()
+    if handled:
+        log.info("due_orders_processed", orders=handled)
+
+
 class WorkerSettings:
     functions = (process_photo, process_meta_event, dispatch_event)
-    cron_jobs = (cron(check_whatsapp_tokens, hour=3, minute=0, timeout=3600),)
+    cron_jobs = (
+        cron(check_whatsapp_tokens, hour=3, minute=0, timeout=3600),
+        # Every minute: reminders at 15 and 60 minutes, expiry after 24 hours.
+        cron(process_due_orders, second=0, timeout=50, unique=True),
+    )
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

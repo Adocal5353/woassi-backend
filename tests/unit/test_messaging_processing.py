@@ -6,6 +6,7 @@ import pytest
 from tests.fakes import (
     FakeMessagingUoW,
     FakeShopConnections,
+    FakeTemplateRegistry,
     FakeWhatsAppAccounts,
     MessagingState,
     RecordingInboundHandler,
@@ -13,6 +14,7 @@ from tests.fakes import (
 from woassi.modules.messaging.application.ports import SendError, SendFailure, ShopConnection
 from woassi.modules.messaging.application.use_cases.processing import HandleMetaEvent
 from woassi.modules.messaging.application.use_cases.sending import SendWhatsAppMessage
+from woassi.modules.messaging.application.use_cases.templates import EnsureTemplateSendable
 from woassi.modules.messaging.domain.content import MessageContent, Recipient, TextMessage
 from woassi.modules.messaging.domain.errors import (
     InvalidRecipient,
@@ -28,7 +30,7 @@ from woassi.modules.messaging.domain.event import (
 from woassi.modules.messaging.domain.outbound import OutboundStatus
 from woassi.shared.infrastructure.clock import FrozenClock
 
-SHOP = ShopConnection(shop_id=uuid4(), phone_number_id="2002", access_token="token")
+SHOP = ShopConnection(shop_id=uuid4(), waba_id="1001", phone_number_id="2002", access_token="token")
 CLOCK = FrozenClock(datetime(2026, 1, 1, tzinfo=UTC))
 
 
@@ -114,7 +116,9 @@ class FakeSender:
 
 
 def sending(database: MessagingState, sender: FakeSender) -> SendWhatsAppMessage:
-    return SendWhatsAppMessage(FakeMessagingUoW(database), FakeShopConnections(SHOP), sender, CLOCK)
+    uow = FakeMessagingUoW(database)
+    guard = EnsureTemplateSendable(uow, FakeTemplateRegistry(), CLOCK)
+    return SendWhatsAppMessage(uow, FakeShopConnections(SHOP), sender, guard, CLOCK)
 
 
 async def send(database: MessagingState, sender: FakeSender, shop_id: object = None) -> str:

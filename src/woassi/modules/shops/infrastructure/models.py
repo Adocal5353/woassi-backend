@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,9 @@ class ShopSettingsModel(Base):
     welcome_message: Mapped[str] = mapped_column(Text)
     invoice_details: Mapped[dict[str, Any]] = mapped_column(JSONB)
     invoice_prefix: Mapped[str] = mapped_column(String(10))
+    language: Mapped[str] = mapped_column(String(5))
+    validation_mode: Mapped[str] = mapped_column(String(20))
+    auto_validation_max_amount: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class WhatsAppAccountModel(Base):

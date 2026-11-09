@@ -15,9 +15,10 @@ from woassi.modules.accounts.domain.refresh_token import RefreshToken
 from woassi.modules.accounts.domain.verification_code import CodePurpose, VerificationCode
 from woassi.modules.catalog.domain.errors import UnreadableImage
 from woassi.modules.catalog.domain.product import Product
-from woassi.modules.messaging.application.ports import ShopConnection
+from woassi.modules.messaging.application.ports import ShopConnection, SubmittedTemplate
 from woassi.modules.messaging.domain.event import InboundMessage, MetaEvent
 from woassi.modules.messaging.domain.outbound import OutboundMessage
+from woassi.modules.messaging.domain.templates import MessageTemplate, TemplateDefinition
 from woassi.modules.shops.domain.errors import PhoneNumberAlreadyConnected, SlugTaken
 from woassi.modules.shops.domain.shop import Shop, WhatsAppStatus
 from woassi.shared.application.ports import IdempotencyRecord, ObjectInfo, StoredResponse
@@ -499,6 +500,47 @@ class FakeShopsUoW:
 class MessagingState:
     claimed: set[tuple[str, str]] = field(default_factory=set)
     outbound: dict[str, OutboundMessage] = field(default_factory=dict)
+    templates: dict[tuple[UUID, str, str], MessageTemplate] = field(default_factory=dict)
+
+
+class FakeMessageTemplates:
+    def __init__(self, uow: "FakeMessagingUoW") -> None:
+        self._uow = uow
+
+    async def get(self, shop_id: UUID, name: str, language: str) -> MessageTemplate | None:
+        return deepcopy(self._uow.state.templates.get((shop_id, name, language)))
+
+    async def list_by_waba(self, waba_id: str, name: str) -> Sequence[MessageTemplate]:
+        return [
+            deepcopy(t)
+            for t in self._uow.state.templates.values()
+            if t.waba_id == waba_id and t.name == name
+        ]
+
+    async def save(self, template: MessageTemplate) -> None:
+        key = (template.shop_id, template.name, template.language)
+        self._uow.state.templates[key] = deepcopy(template)
+
+
+class FakeTemplateRegistry:
+    """Meta's side: what was submitted, and the status Meta gives back."""
+
+    def __init__(self, status: str = "APPROVED") -> None:
+        self.status_value = status
+        self.submitted: list[TemplateDefinition] = []
+        self.lookups = 0
+
+    async def submit(
+        self, connection: ShopConnection, definition: TemplateDefinition
+    ) -> SubmittedTemplate:
+        self.submitted.append(definition)
+        return SubmittedTemplate(meta_template_id=str(len(self.submitted)), status="PENDING")
+
+    async def status(
+        self, connection: ShopConnection, name: str, language: str
+    ) -> SubmittedTemplate | None:
+        self.lookups += 1
+        return SubmittedTemplate(meta_template_id="1", status=self.status_value)
 
 
 class FakeInbox:
@@ -543,6 +585,10 @@ class FakeMessagingUoW:
         return FakeOutboundMessages(self)
 
     @property
+    def templates(self) -> FakeMessageTemplates:
+        return FakeMessageTemplates(self)
+
+    @property
     def audit(self) -> FakeAuditLog:
         return self.audit_log
 
@@ -561,6 +607,7 @@ class FakeMessagingUoW:
     async def commit(self) -> None:
         self.database.claimed = set(self.state.claimed)
         self.database.outbound = deepcopy(self.state.outbound)
+        self.database.templates = deepcopy(self.state.templates)
 
     async def rollback(self) -> None:
         self.state = deepcopy(self.database)

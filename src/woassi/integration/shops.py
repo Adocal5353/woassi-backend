@@ -1,9 +1,12 @@
 from uuid import UUID
 
 from woassi.modules.messaging.application.ports import ShopConnection
+from woassi.modules.orders.application.ports import ShopProfile
+from woassi.modules.orders.domain.order import ValidationMode
 from woassi.modules.shops.application.dto import ShopRouting
 from woassi.modules.shops.application.use_cases.shops import (
     CheckShopOwnership,
+    GetShopOrderProfile,
     ResolveShopByPhoneNumber,
     ResolveShopConnection,
 )
@@ -25,6 +28,7 @@ def _connection(routing: ShopRouting | None) -> ShopConnection | None:
         return None
     return ShopConnection(
         shop_id=routing.shop_id,
+        waba_id=routing.waba_id,
         phone_number_id=routing.phone_number_id,
         access_token=routing.access_token,
     )
@@ -54,3 +58,27 @@ class ShopsWhatsAppAccounts:
 
     async def account_removed(self, waba_id: str) -> int:
         return await self._use_case.execute(waba_id)
+
+
+class ShopsOrderProfiles:
+    """ShopsPort, for the orders module, backed by the shops module."""
+
+    def __init__(self, use_case: GetShopOrderProfile) -> None:
+        self._use_case = use_case
+
+    async def profile(self, shop_id: UUID) -> ShopProfile | None:
+        profile = await self._use_case.execute(shop_id)
+        if profile is None:
+            return None
+        return ShopProfile(
+            shop_id=profile.shop_id,
+            account_id=profile.account_id,
+            name=profile.name,
+            language=profile.language.value,
+            validation_mode=ValidationMode(profile.validation_mode.value),
+            auto_validation_max_amount=profile.auto_validation_max_amount,
+            notification_number=profile.notification_number,
+            reminder_1_minutes=profile.reminder_1_minutes,
+            reminder_2_minutes=profile.reminder_2_minutes,
+            expiration_hours=profile.expiration_hours,
+        )

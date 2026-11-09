@@ -1,0 +1,11 @@
+from woassi.shared.domain.errors import Conflict, NotFound
+
+
+class OrderNotFound(NotFound):
+    code = "orders.order_not_found"
+
+
+class OrderNotOpen(Conflict):
+    """The order was already confirmed, refused, cancelled or has expired."""
+
+    code = "orders.order_not_open"

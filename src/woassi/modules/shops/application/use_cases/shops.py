@@ -1,7 +1,13 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from woassi.modules.shops.application.dto import ShopRouting, ShopView, shop_view
+from woassi.modules.shops.application.dto import (
+    ShopOrderProfile,
+    ShopRouting,
+    ShopView,
+    order_profile,
+    shop_view,
+)
 from woassi.modules.shops.application.ports import MetaOnboardingPort, ShopsUnitOfWork
 from woassi.modules.shops.application.use_cases.support import load_shop, unsubscribe_quietly
 from woassi.modules.shops.domain.errors import SlugTaken
@@ -175,6 +181,17 @@ def _routing(shop: Shop | None, cipher: SecretCipher) -> ShopRouting | None:
     assert whatsapp.encrypted_token is not None and whatsapp.phone_number_id is not None
     return ShopRouting(
         shop_id=shop.id,
+        waba_id=whatsapp.waba_id,
         phone_number_id=whatsapp.phone_number_id,
         access_token=cipher.decrypt(whatsapp.encrypted_token),
     )
+
+
+class GetShopOrderProfile:
+    def __init__(self, uow: ShopsUnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self, shop_id: UUID) -> ShopOrderProfile | None:
+        async with self._uow as uow:
+            shop = await uow.shops.get(shop_id)
+        return order_profile(shop) if shop else None

@@ -144,7 +144,34 @@ API messages are for developers: a user-facing French UI should map from the sta
 - The sender retries only when Meta certainly sent nothing: connection refused, `130429`, `131056`.
   A timeout is never retried, as the customer could get the message twice.
 - `PARTNER_REMOVED`, `ACCOUNT_DELETED` and `ACCOUNT_OFFBOARDED` disconnect the account's shops.
-- `integration/orders.py` only logs inbound messages until the orders module exists.
+- Message templates are submitted to each shop's account when it connects (deferred subscriber
+  `messaging.provision_templates`), in every language of `orders/application/texts.py`. Meta
+  reviews them within 24 hours. `SendWhatsAppMessage` refuses a template that is not `APPROVED`
+  (`TemplateNotApproved`), after asking Meta once in case a status webhook was missed.
+
+## Orders
+
+- `integration/orders.py` turns inbound messages into orders: a cart (`order`) goes to
+  `ReceiveCart`, a tapped button (`button` for templates, `interactive` otherwise) to
+  `ReplyToOrder`. Anything else only updates the customer, which also tracks the 24-hour window.
+- Flow: stock is reserved on receipt. Part of the cart missing → `AWAITING_CUSTOMER` with
+  "take the rest?" buttons. Then the shop's `validation_mode`: `MANUAL` (default) waits for the
+  merchant; `AUTOMATIC` confirms, unless the total is above `auto_validation_max_amount`.
+- **A button reply is only trusted if its `context_message_id` is the message we sent** for that
+  order: anyone can type `order:accept:<id>`. Merchant buttons answer the validation template,
+  customer buttons the offer.
+- Closing (refused, cancelled, expired) gives the stock back. `OrderConfirmed` is for billing.
+- The cron `process_due_orders` runs every minute on `orders.next_deadline`: reminders at
+  `reminder_1_minutes` and `reminder_2_minutes`, expiry after `expiration_hours`. It checks again
+  under the row lock, so a merchant answering meanwhile wins.
+- Messages never fail an order (`NotificationNotSent` is only logged): the dashboard routes
+  (`/shops/{id}/orders`, `accept`, `refuse`) are the fallback, and the only way without a
+  notification number or an approved template.
+- Texts live in `orders/application/texts.py`, in French and English (`ShopSettings.language`).
+  Template parameters must be a single line.
+- Stock reservation locks the products in id order (`list_for_update`): no overselling, no
+  deadlock. Order numbers come from `order_counters`, under a row lock.
+- A cart replayed by Meta finds its order through `source_message_id` (unique per shop).
 
 ## Pitfalls
 
@@ -184,7 +211,7 @@ Object keys:
 
 ## Current state
 
-`accounts`, `catalog`, `messaging` and `shops` contain code. `customers`, `orders`, `billing` and
+`accounts`, `catalog`, `customers`, `messaging`, `orders` and `shops` contain code. `billing` and
 `payments` are empty packages. Codes are only written to the logs (`LogVerificationCodeSender`, dev
-only). The worker routes webhooks to shops; messages can be sent, but nothing sends them yet. No calls to the payment
+only). Carts become orders; customers and merchants get WhatsApp messages. No calls to the payment
 aggregator.

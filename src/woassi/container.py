@@ -10,9 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from woassi.config import Settings
 from woassi.integration.accounts import AccountsAuthenticator
+from woassi.integration.catalog import CatalogStock
+from woassi.integration.customers import CustomerContacts
 from woassi.integration.images import CatalogLogoProcessor
-from woassi.integration.orders import UnhandledInboundMessages
-from woassi.integration.shops import ShopsConnections, ShopsOwnership, ShopsWhatsAppAccounts
+from woassi.integration.messaging import WhatsAppNotifications, template_definitions
+from woassi.integration.orders import OrdersInboundHandler
+from woassi.integration.shops import (
+    ShopsConnections,
+    ShopsOrderProfiles,
+    ShopsOwnership,
+    ShopsWhatsAppAccounts,
+)
 from woassi.modules.accounts.application.facade import AccountsUseCases
 from woassi.modules.accounts.application.ports import (
     AccountsUnitOfWork,
@@ -53,9 +61,19 @@ from woassi.modules.catalog.application.use_cases.products import (
     GetProduct,
     ListProducts,
 )
+from woassi.modules.catalog.application.use_cases.stock import ReleaseStock, ReserveStock
 from woassi.modules.catalog.infrastructure.image_processor import PillowImageProcessor
 from woassi.modules.catalog.infrastructure.photo_queue import ArqPhotoJobQueue
 from woassi.modules.catalog.infrastructure.uow import SqlAlchemyCatalogUoW
+from woassi.modules.customers.application.facade import CustomersUseCases
+from woassi.modules.customers.application.ports import CustomersUnitOfWork
+from woassi.modules.customers.application.use_cases.customers import (
+    ChangeCustomerUserId,
+    GetCustomer,
+    ListCustomers,
+    RecordContact,
+)
+from woassi.modules.customers.infrastructure.uow import SqlAlchemyCustomersUoW
 from woassi.modules.messaging.application.facade import MessagingUseCases
 from woassi.modules.messaging.application.ports import (
     EventQueue,
@@ -67,13 +85,36 @@ from woassi.modules.messaging.application.ports import (
 )
 from woassi.modules.messaging.application.use_cases.processing import HandleMetaEvent
 from woassi.modules.messaging.application.use_cases.sending import SendWhatsAppMessage
+from woassi.modules.messaging.application.use_cases.templates import (
+    EnsureTemplateSendable,
+    ProvisionTemplates,
+)
 from woassi.modules.messaging.application.use_cases.webhook import (
     ReceiveMetaWebhook,
     VerifyMetaSubscription,
 )
 from woassi.modules.messaging.infrastructure.event_queue import ArqEventQueue
+from woassi.modules.messaging.infrastructure.template_registry import GraphTemplateRegistry
 from woassi.modules.messaging.infrastructure.uow import SqlAlchemyMessagingUoW
 from woassi.modules.messaging.infrastructure.whatsapp_sender import HttpxWhatsAppSender
+from woassi.modules.orders.application.facade import OrdersUseCases
+from woassi.modules.orders.application.ports import (
+    CatalogPort,
+    CustomersPort,
+    MessagingPort,
+    OrdersUnitOfWork,
+    ShopsPort,
+)
+from woassi.modules.orders.application.use_cases.orders import (
+    DecideOrder,
+    GetOrder,
+    ListOrders,
+    OrderFlow,
+    ProcessDueOrders,
+    ReceiveCart,
+    ReplyToOrder,
+)
+from woassi.modules.orders.infrastructure.uow import SqlAlchemyOrdersUoW
 from woassi.modules.shops.application.facade import ShopsUseCases
 from woassi.modules.shops.application.ports import (
     LogoProcessor,
@@ -92,6 +133,7 @@ from woassi.modules.shops.application.use_cases.shops import (
     CheckShopOwnership,
     CreateShop,
     GetShop,
+    GetShopOrderProfile,
     ListShops,
     ResolveShopByPhoneNumber,
     ResolveShopConnection,
@@ -104,6 +146,7 @@ from woassi.modules.shops.application.use_cases.whatsapp import (
     GetWhatsApp,
     HandleWhatsAppAccountRemoved,
 )
+from woassi.modules.shops.domain.events import WhatsAppConnected
 from woassi.modules.shops.infrastructure.meta_onboarding import HttpxMetaOnboarding
 from woassi.modules.shops.infrastructure.uow import SqlAlchemyShopsUoW
 from woassi.shared.application.audit import ListAuditEntries
@@ -153,7 +196,13 @@ def _code_sender(settings: Settings) -> VerificationCodeSender:
 
 @dataclass
 class Container(
-    AccountsUseCases, CatalogUseCases, MessagingUseCases, SharedUseCases, ShopsUseCases
+    AccountsUseCases,
+    CatalogUseCases,
+    CustomersUseCases,
+    MessagingUseCases,
+    OrdersUseCases,
+    SharedUseCases,
+    ShopsUseCases,
 ):
     settings: Settings
     engine: AsyncEngine
@@ -202,6 +251,17 @@ class Container(
 
     def _register_subscribers(self) -> None:
         """Bind domain events to their subscribers, in the API and in the worker alike."""
+
+        async def provision_templates(event: WhatsAppConnected) -> None:
+            await self.provision_templates().execute(event.shop_id)
+
+        # Deferred: several Graph calls, which must not slow down the connection request.
+        self.event_bus.subscribe(
+            WhatsAppConnected,
+            provision_templates,
+            name="messaging.provision_templates",
+            deferred=True,
+        )
 
     async def close(self) -> None:
         await self.http.aclose()
@@ -253,7 +313,79 @@ class Container(
         return ShopsWhatsAppAccounts(HandleWhatsAppAccountRemoved(self.shops_uow()))
 
     def inbound_message_handler(self) -> InboundMessageHandler:
-        return UnhandledInboundMessages()
+        return OrdersInboundHandler(
+            RecordContact(self.customers_uow()),
+            ChangeCustomerUserId(self.customers_uow()),
+            self.receive_cart(),
+            self.reply_to_order(),
+            self.clock,
+        )
+
+    def customers_uow(self) -> CustomersUnitOfWork:
+        return SqlAlchemyCustomersUoW(self.sessions, self.event_bus, self.clock)
+
+    def orders_uow(self) -> OrdersUnitOfWork:
+        return SqlAlchemyOrdersUoW(self.sessions, self.event_bus, self.clock)
+
+    def order_shops(self) -> ShopsPort:
+        return ShopsOrderProfiles(GetShopOrderProfile(self.shops_uow()))
+
+    def order_catalog(self) -> CatalogPort:
+        return CatalogStock(ReserveStock(self.catalog_uow()), ReleaseStock(self.catalog_uow()))
+
+    def order_customers(self) -> CustomersPort:
+        return CustomerContacts(GetCustomer(self.customers_uow()))
+
+    def order_messaging(self) -> MessagingPort:
+        return WhatsAppNotifications(self.send_whatsapp_message())
+
+    def template_registry(self) -> GraphTemplateRegistry:
+        return GraphTemplateRegistry(self.graph())
+
+    def _order_flow[F: OrderFlow](self, use_case: type[F]) -> F:
+        return use_case(
+            self.orders_uow(),
+            self.order_shops(),
+            self.order_catalog(),
+            self.order_customers(),
+            self.order_messaging(),
+            self.clock,
+        )
+
+    # Use cases: orders
+    def receive_cart(self) -> ReceiveCart:
+        return self._order_flow(ReceiveCart)
+
+    def reply_to_order(self) -> ReplyToOrder:
+        return self._order_flow(ReplyToOrder)
+
+    def decide_order(self) -> DecideOrder:
+        return self._order_flow(DecideOrder)
+
+    def process_due_orders(self) -> ProcessDueOrders:
+        return self._order_flow(ProcessDueOrders)
+
+    def list_orders(self) -> ListOrders:
+        return ListOrders(self.orders_uow())
+
+    def get_order(self) -> GetOrder:
+        return GetOrder(self.orders_uow())
+
+    # Use cases: customers
+    def list_customers(self) -> ListCustomers:
+        return ListCustomers(self.customers_uow())
+
+    def get_customer(self) -> GetCustomer:
+        return GetCustomer(self.customers_uow())
+
+    def provision_templates(self) -> ProvisionTemplates:
+        return ProvisionTemplates(
+            self.messaging_uow(),
+            self.shop_connections(),
+            self.template_registry(),
+            template_definitions(),
+            self.clock,
+        )
 
     def messaging_uow(self) -> MessagingUnitOfWork:
         return SqlAlchemyMessagingUoW(self.sessions, self.event_bus, self.clock)
@@ -273,7 +405,11 @@ class Container(
 
     def send_whatsapp_message(self) -> SendWhatsAppMessage:
         return SendWhatsAppMessage(
-            self.messaging_uow(), self.shop_connections(), self.whatsapp_sender(), self.clock
+            self.messaging_uow(),
+            self.shop_connections(),
+            self.whatsapp_sender(),
+            EnsureTemplateSendable(self.messaging_uow(), self.template_registry(), self.clock),
+            self.clock,
         )
 
     def catalog_uow(self) -> CatalogUnitOfWork:

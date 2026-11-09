@@ -8,12 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from woassi.modules.shops.domain.errors import PhoneNumberAlreadyConnected, SlugTaken
 from woassi.modules.shops.domain.shop import (
     InvoiceDetails,
+    Language,
     Operator,
     PaymentMode,
     ReceivingAccount,
     Shop,
     ShopSettings,
     ShopStatus,
+    ValidationMode,
     WhatsAppAccount,
     WhatsAppStatus,
 )
@@ -38,6 +40,9 @@ def _settings_to_domain(model: ShopSettingsModel) -> ShopSettings:
         welcome_message=model.welcome_message,
         invoice_details=InvoiceDetails(**model.invoice_details),
         invoice_prefix=model.invoice_prefix,
+        language=Language(model.language),
+        validation_mode=ValidationMode(model.validation_mode),
+        auto_validation_max_amount=model.auto_validation_max_amount,
     )
 
 
@@ -103,6 +108,9 @@ def _copy_settings(settings: ShopSettings, model: ShopSettingsModel) -> ShopSett
         "phone": details.phone,
     }
     model.invoice_prefix = settings.invoice_prefix
+    model.language = settings.language.value
+    model.validation_mode = settings.validation_mode.value
+    model.auto_validation_max_amount = settings.auto_validation_max_amount
     return model
 
 

@@ -4,12 +4,14 @@ from uuid import UUID
 
 from woassi.modules.shops.domain.shop import (
     InvoiceDetails,
+    Language,
     Operator,
     PaymentMode,
     ReceivingAccount,
     Shop,
     ShopSettings,
     ShopStatus,
+    ValidationMode,
     WhatsAppAccount,
     WhatsAppStatus,
 )
@@ -53,6 +55,9 @@ class SettingsView:
     welcome_message: str
     invoice_details: InvoiceDetails
     invoice_prefix: str
+    language: Language
+    validation_mode: ValidationMode
+    auto_validation_max_amount: int | None
 
 
 def settings_view(settings: ShopSettings) -> SettingsView:
@@ -66,6 +71,9 @@ def settings_view(settings: ShopSettings) -> SettingsView:
         welcome_message=settings.welcome_message,
         invoice_details=settings.invoice_details,
         invoice_prefix=settings.invoice_prefix,
+        language=settings.language,
+        validation_mode=settings.validation_mode,
+        auto_validation_max_amount=settings.auto_validation_max_amount,
     )
 
 
@@ -126,5 +134,39 @@ class LogoUpload:
 @dataclass(frozen=True, slots=True)
 class ShopRouting:
     shop_id: UUID
+    waba_id: str
     phone_number_id: str
     access_token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ShopOrderProfile:
+    """What the orders module needs to know about a shop."""
+
+    shop_id: UUID
+    account_id: UUID
+    name: str
+    language: Language
+    validation_mode: ValidationMode
+    auto_validation_max_amount: int | None
+    notification_number: str | None = field(repr=False)
+    reminder_1_minutes: int
+    reminder_2_minutes: int
+    expiration_hours: int
+
+
+def order_profile(shop: Shop) -> ShopOrderProfile:
+    settings = shop.settings
+    number = settings.notification_number
+    return ShopOrderProfile(
+        shop_id=shop.id,
+        account_id=shop.account_id,
+        name=shop.name,
+        language=settings.language,
+        validation_mode=settings.validation_mode,
+        auto_validation_max_amount=settings.auto_validation_max_amount,
+        notification_number=number.value if number else None,
+        reminder_1_minutes=settings.reminder_1_minutes,
+        reminder_2_minutes=settings.reminder_2_minutes,
+        expiration_hours=settings.expiration_hours,
+    )

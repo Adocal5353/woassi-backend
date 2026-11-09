@@ -17,6 +17,12 @@ class ProductRepository(Protocol):
 
     async def count(self, shop_id: UUID) -> int: ...
 
+    async def list_for_update(
+        self, shop_id: UUID, *, retailer_ids: Sequence[str] = (), ids: Sequence[UUID] = ()
+    ) -> Sequence[Product]:
+        """Lock the matching products until the end of the transaction."""
+        ...
+
     async def save(self, product: Product) -> None: ...
 
 

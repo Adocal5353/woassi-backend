@@ -63,6 +63,18 @@ class WhatsAppStatus(StrEnum):
     DISCONNECTED = "DISCONNECTED"
 
 
+class Language(StrEnum):
+    FR = "fr"
+    EN = "en"
+
+
+class ValidationMode(StrEnum):
+    """MANUAL: every order waits for the merchant. AUTOMATIC: only the doubtful ones do."""
+
+    MANUAL = "MANUAL"
+    AUTOMATIC = "AUTOMATIC"
+
+
 class Operator(StrEnum):
     MIXX = "MIXX"
     MOOV = "MOOV"
@@ -87,8 +99,15 @@ class ShopSettings:
     welcome_message: str = ""
     invoice_details: InvoiceDetails = field(default_factory=InvoiceDetails)
     invoice_prefix: str = "FAC"
+    language: Language = Language.FR
+    # Manual by default: a new shop's stock is rarely accurate yet.
+    validation_mode: ValidationMode = ValidationMode.MANUAL
+    # In automatic mode, orders above this amount still go to the merchant.
+    auto_validation_max_amount: int | None = None
 
     def __post_init__(self) -> None:
+        if self.auto_validation_max_amount is not None and self.auto_validation_max_amount <= 0:
+            raise InvalidSettings("The automatic validation limit must be positive.")
         if not self.payment_modes:
             raise InvalidSettings("At least one payment mode is required.")
         expiration_minutes = self.expiration_hours * 60

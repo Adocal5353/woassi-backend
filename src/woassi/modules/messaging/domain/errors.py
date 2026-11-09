@@ -29,3 +29,9 @@ class InvalidRecipient(InvalidData):
 
 class MessageNotSent(UpstreamError):
     code = "messaging.message_not_sent"
+
+
+class TemplateNotApproved(Conflict):
+    """Meta has not approved the template yet, or no longer allows it."""
+
+    code = "messaging.template_not_approved"
