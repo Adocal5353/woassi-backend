@@ -1,11 +1,11 @@
+
 x-app: &app
   build: .
   image: woassi-api:dev
-  # The arq worker exits when Redis goes away: without this it would stay down silently.
   restart: unless-stopped
-  env_file: .env
+  env_file:
+    - .env
   environment: &app-env
-    # On the Compose network, services reach each other by name.
     DATABASE_URL: postgresql+asyncpg://woassi:woassi@postgres:5432/woassi
     REDIS_URL: redis://redis:6379/0
     MINIO_ENDPOINT: minio:9000
@@ -23,9 +23,9 @@ x-app: &app
 services:
   api:
     <<: *app
-    command: uvicorn woassi.main:create_app --factory --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src
+    command: uvicorn woassi.main:create_app --factory --host 0.0.0.0 --port 8000
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8000"
 
   worker:
     <<: *app
@@ -33,12 +33,12 @@ services:
 
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: woassi
       POSTGRES_PASSWORD: woassi
       POSTGRES_DB: woassi
     ports:
-      # 5433 on the host: 5432 is often taken by a local PostgreSQL.
       - "127.0.0.1:5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -53,11 +53,15 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   minio:
-    # The minio/minio image is no longer available on Docker Hub.
     image: cgr.dev/chainguard/minio:latest
-    # Named volume created as root: the default user (65532) cannot write to it.
+    restart: unless-stopped
     user: "0:0"
     command: server /data --console-address :9001
     environment:
@@ -69,7 +73,6 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      # The image has no curl, mc or grep: HTTP request using bash builtins.
       test:
         - CMD
         - bash
@@ -84,9 +87,10 @@ services:
       retries: 20
 
   minio-init:
-    # The -dev variant is the only one that ships a shell.
     image: cgr.dev/chainguard/minio-client:latest-dev
-    env_file: .env
+    restart: "no"
+    env_file:
+      - .env
     depends_on:
       minio:
         condition: service_healthy
@@ -101,4 +105,5 @@ services:
 
 volumes:
   postgres-data:
+  redis_data:
   minio-data:
