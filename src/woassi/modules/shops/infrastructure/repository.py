@@ -207,6 +207,15 @@ class SqlAlchemyShopRepository:
         )
         return [_to_domain(model) for model in models]
 
+    async def list_by_waba_id(self, waba_id: str) -> Sequence[Shop]:
+        models = await self._session.scalars(
+            select(ShopModel)
+            .join(WhatsAppAccountModel)
+            .where(WhatsAppAccountModel.waba_id == waba_id, ShopModel.archived_at.is_(None))
+            .order_by(ShopModel.id)
+        )
+        return [_to_domain(model) for model in models]
+
     async def save(self, shop: Shop) -> None:
         model = await self._session.get(ShopModel, shop.id)
         if model is None:

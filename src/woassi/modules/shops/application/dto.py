@@ -126,4 +126,5 @@ class LogoUpload:
 @dataclass(frozen=True, slots=True)
 class ShopRouting:
     shop_id: UUID
+    phone_number_id: str
     access_token: str = field(repr=False)

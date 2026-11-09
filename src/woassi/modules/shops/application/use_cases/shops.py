@@ -152,9 +152,29 @@ class ResolveShopByPhoneNumber:
         """None for an unknown number, or a shop that may not process messages."""
         async with self._uow as uow:
             shop = await uow.shops.get_by_phone_number_id(phone_number_id)
-        if shop is None or shop.status is not ShopStatus.ACTIVE or not shop.whatsapp_connected:
-            return None
-        assert shop.whatsapp is not None and shop.whatsapp.encrypted_token is not None
-        return ShopRouting(
-            shop_id=shop.id, access_token=self._cipher.decrypt(shop.whatsapp.encrypted_token)
-        )
+        return _routing(shop, self._cipher)
+
+
+class ResolveShopConnection:
+    def __init__(self, uow: ShopsUnitOfWork, cipher: SecretCipher) -> None:
+        self._uow = uow
+        self._cipher = cipher
+
+    async def execute(self, shop_id: UUID) -> ShopRouting | None:
+        """None for an unknown shop, or one that may not send messages."""
+        async with self._uow as uow:
+            shop = await uow.shops.get(shop_id)
+        return _routing(shop, self._cipher)
+
+
+def _routing(shop: Shop | None, cipher: SecretCipher) -> ShopRouting | None:
+    if shop is None or shop.status is not ShopStatus.ACTIVE or not shop.whatsapp_connected:
+        return None
+    whatsapp = shop.whatsapp
+    assert whatsapp is not None
+    assert whatsapp.encrypted_token is not None and whatsapp.phone_number_id is not None
+    return ShopRouting(
+        shop_id=shop.id,
+        phone_number_id=whatsapp.phone_number_id,
+        access_token=cipher.decrypt(whatsapp.encrypted_token),
+    )

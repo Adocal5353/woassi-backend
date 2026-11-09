@@ -15,7 +15,9 @@ from woassi.modules.accounts.domain.refresh_token import RefreshToken
 from woassi.modules.accounts.domain.verification_code import CodePurpose, VerificationCode
 from woassi.modules.catalog.domain.errors import UnreadableImage
 from woassi.modules.catalog.domain.product import Product
-from woassi.modules.messaging.domain.event import MetaEvent
+from woassi.modules.messaging.application.ports import ShopConnection
+from woassi.modules.messaging.domain.event import InboundMessage, MetaEvent
+from woassi.modules.messaging.domain.outbound import OutboundMessage
 from woassi.modules.shops.domain.errors import PhoneNumberAlreadyConnected, SlugTaken
 from woassi.modules.shops.domain.shop import Shop, WhatsAppStatus
 from woassi.shared.application.ports import IdempotencyRecord, ObjectInfo, StoredResponse
@@ -434,6 +436,11 @@ class FakeShopRepository:
             ]
         )
 
+    async def list_by_waba_id(self, waba_id: str) -> Sequence[Shop]:
+        return deepcopy(
+            [s for s in self._visible() if s.whatsapp and s.whatsapp.waba_id == waba_id]
+        )
+
     async def save(self, shop: Shop) -> None:
         number = shop.whatsapp.phone_number_id if shop.whatsapp else None
         for other in self._uow.state.values():
@@ -486,3 +493,106 @@ class FakeShopsUoW:
     async def rollback(self) -> None:
         self.state = deepcopy(self.database)
         self.tracked = []
+
+
+@dataclass
+class MessagingState:
+    claimed: set[tuple[str, str]] = field(default_factory=set)
+    outbound: dict[str, OutboundMessage] = field(default_factory=dict)
+
+
+class FakeInbox:
+    def __init__(self, uow: "FakeMessagingUoW") -> None:
+        self._uow = uow
+
+    async def claim(self, source: str, key: str) -> bool:
+        if (source, key) in self._uow.state.claimed:
+            return False
+        self._uow.state.claimed.add((source, key))
+        return True
+
+
+class FakeOutboundMessages:
+    def __init__(self, uow: "FakeMessagingUoW") -> None:
+        self._uow = uow
+
+    async def add(self, message: OutboundMessage) -> None:
+        self._uow.state.outbound[message.id] = deepcopy(message)
+
+    async def get(self, message_id: str) -> OutboundMessage | None:
+        return deepcopy(self._uow.state.outbound.get(message_id))
+
+    async def save(self, message: OutboundMessage) -> None:
+        self._uow.state.outbound[message.id] = deepcopy(message)
+
+
+class FakeMessagingUoW:
+    """Works on a copy of the database: what is not committed disappears, like a rollback."""
+
+    def __init__(self, database: MessagingState) -> None:
+        self.database = database
+        self.state = deepcopy(database)
+        self.audit_log = FakeAuditLog()
+
+    @property
+    def inbox(self) -> FakeInbox:
+        return FakeInbox(self)
+
+    @property
+    def outbound(self) -> FakeOutboundMessages:
+        return FakeOutboundMessages(self)
+
+    @property
+    def audit(self) -> FakeAuditLog:
+        return self.audit_log
+
+    async def __aenter__(self) -> Self:
+        self.state = deepcopy(self.database)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.rollback()
+
+    async def commit(self) -> None:
+        self.database.claimed = set(self.state.claimed)
+        self.database.outbound = deepcopy(self.state.outbound)
+
+    async def rollback(self) -> None:
+        self.state = deepcopy(self.database)
+
+
+class FakeShopConnections:
+    def __init__(self, *connections: ShopConnection) -> None:
+        self.connections = list(connections)
+
+    async def by_phone_number_id(self, phone_number_id: str) -> ShopConnection | None:
+        return next((c for c in self.connections if c.phone_number_id == phone_number_id), None)
+
+    async def by_shop_id(self, shop_id: UUID) -> ShopConnection | None:
+        return next((c for c in self.connections if c.shop_id == shop_id), None)
+
+
+class FakeWhatsAppAccounts:
+    def __init__(self) -> None:
+        self.removed: list[str] = []
+
+    async def account_removed(self, waba_id: str) -> int:
+        self.removed.append(waba_id)
+        return 1
+
+
+class RecordingInboundHandler:
+    def __init__(self, *, failures: int = 0) -> None:
+        self.handled: list[tuple[UUID, InboundMessage]] = []
+        self.failures = failures
+
+    async def handle(self, shop_id: UUID, message: InboundMessage) -> None:
+        if self.failures:
+            self.failures -= 1
+            raise ConnectionError("orders is down")
+        self.handled.append((shop_id, message))

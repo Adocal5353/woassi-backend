@@ -116,13 +116,35 @@ API messages are for developers: a user-facing French UI should map from the sta
   merchant's token, otherwise anyone could squat someone else's number with a fake code.
 - Graph calls live in `shops/infrastructure/meta_onboarding.py`, each with a link to its doc, and
   run outside any transaction. Check the doc again when changing `META_GRAPH_VERSION`.
-- **Graph secrets travel in query strings.** Never log a URL or an httpx exception. `httpx` logging
-  is silenced, Sentry's httpx integration is disabled, and `MetaError` carries no Meta text.
+- **Graph secrets travel in query strings.** Every Graph call goes through
+  `shared/infrastructure/meta_graph.py` (`GraphClient`), which never lets a URL or an httpx
+  exception out. `httpx` logging is silenced, Sentry's httpx integration is disabled, and
+  `MetaError` and `SendError` carry no Meta text.
 - `MetaError` is only a shop failure when Meta says so: the daily token check ignores outages.
 - Coexistence: skip `POST /{phone}/register`, and `smb_app_data` works once per sync type, within
   24 hours. Numbers not on `platform_type=CLOUD_API` are refused, as `/register` is not implemented.
 - A receiving account receives the money: changing its operator or number resets `verified`.
 - No FK across modules: it would tie them together, and shops and accounts are never deleted.
+
+## Messaging
+
+- The worker job `process_meta_event` runs `HandleMetaEvent`. The API answers Meta 200 as soon as
+  events are queued, so Meta will not resend: the worker retries by itself (`Retry`, 5 tries).
+- A message key is claimed in the same transaction as its handling: if the handler raises, the
+  key is rolled back and the message is retried; a concurrent duplicate waits, then skips.
+  Handlers must still be idempotent on `message_id`: a crash between their commit and ours
+  replays the message.
+- **Customers are identified by `sender_user_id` (BSUID), always sent.** `sender_phone` is missing
+  for customers with a WhatsApp username. A BSUID is scoped to the business portfolio, and changes
+  with the customer's phone number (`system` message `user_changed_number`).
+- Other modules send through `SendWhatsAppMessage` (via a port in `integration/`), which records
+  each message in `outbound_messages`; status webhooks only move a status forward.
+- Outside the 24-hour customer service window only an approved `TemplateMessage` goes through
+  (`OutsideCustomerServiceWindow`). The merchant's own notification number is usually outside it.
+- The sender retries only when Meta certainly sent nothing: connection refused, `130429`, `131056`.
+  A timeout is never retried, as the customer could get the message twice.
+- `PARTNER_REMOVED`, `ACCOUNT_DELETED` and `ACCOUNT_OFFBOARDED` disconnect the account's shops.
+- `integration/orders.py` only logs inbound messages until the orders module exists.
 
 ## Pitfalls
 
@@ -140,6 +162,8 @@ API messages are for developers: a user-facing French UI should map from the sta
 - Never log a WhatsApp message's sender or content. arq logs the repr of job arguments:
   `MetaEvent` hides those fields (`repr=False`), so do not replace it with a dict. The same goes
   for any domain event carrying personal data and sent to a deferred subscriber.
+- structlog reserves the `event` keyword for the log name: `log.info("x", event=...)` raises a
+  TypeError at run time. Name it `account_event`, `meta_event`, etc.
 - `AuditLog.list` also shadows the builtin; same fix as `ProductRepository.list`.
 - A Protocol the api needs goes in `application/facade.py`, including for `shared`
   (`SharedUseCases`), so a new shared use case also goes in `Container`.
@@ -162,5 +186,5 @@ Object keys:
 
 `accounts`, `catalog`, `messaging` and `shops` contain code. `customers`, `orders`, `billing` and
 `payments` are empty packages. Codes are only written to the logs (`LogVerificationCodeSender`, dev
-only). The Graph API is only called for onboarding; no messages are sent. No calls to the payment
+only). The worker routes webhooks to shops; messages can be sent, but nothing sends them yet. No calls to the payment
 aggregator.

@@ -18,7 +18,7 @@ from PIL import Image
 from tests.fakes import FakeAuditLog, FakeIdempotencyStore, FakeShopsUoW, FakeStorage
 from woassi.config import Settings
 from woassi.integration.images import CatalogLogoProcessor
-from woassi.integration.shops import ShopsLookup, ShopsOwnership
+from woassi.integration.shops import ShopsConnections, ShopsOwnership
 from woassi.main import create_app
 from woassi.modules.catalog.infrastructure.image_processor import PillowImageProcessor
 from woassi.modules.shops.api.deps import get_shops
@@ -36,6 +36,7 @@ from woassi.modules.shops.application.use_cases.shops import (
     GetShop,
     ListShops,
     ResolveShopByPhoneNumber,
+    ResolveShopConnection,
     UpdateShop,
 )
 from woassi.modules.shops.application.use_cases.whatsapp import (
@@ -57,6 +58,7 @@ from woassi.shared.application.ports import AuthenticatedAccount
 from woassi.shared.domain.events import DomainEvent
 from woassi.shared.infrastructure.clock import FrozenClock
 from woassi.shared.infrastructure.crypto import FernetSecretCipher
+from woassi.shared.infrastructure.meta_graph import GraphClient
 from woassi.shared.infrastructure.phone import PhonenumbersNormalizer
 
 GRAPH = "https://graph.facebook.com/v27.0"
@@ -85,7 +87,7 @@ class Stack:
         self.phones = PhonenumbersNormalizer()
         self.http = httpx.AsyncClient()
         self.meta = HttpxMetaOnboarding(
-            self.http, app_id="app-id", app_secret=APP_SECRET, graph_version="v27.0"
+            GraphClient(self.http, graph_version="v27.0"), app_id="app-id", app_secret=APP_SECRET
         )
 
     def uow(self) -> FakeShopsUoW:
@@ -150,8 +152,11 @@ class Stack:
     def idempotency_store(self) -> FakeIdempotencyStore:
         return FakeIdempotencyStore()
 
-    def lookup(self) -> ShopsLookup:
-        return ShopsLookup(ResolveShopByPhoneNumber(self.uow(), self.cipher))
+    def lookup(self) -> ShopsConnections:
+        return ShopsConnections(
+            ResolveShopByPhoneNumber(self.uow(), self.cipher),
+            ResolveShopConnection(self.uow(), self.cipher),
+        )
 
 
 @pytest.fixture
@@ -774,7 +779,9 @@ async def test_lookup_gives_the_shop_and_the_decrypted_token(
     found = await stack.lookup().by_phone_number_id(PHONE_ID)
     assert found is not None
     assert str(found.shop_id) == shop_id
+    assert found.phone_number_id == PHONE_ID
     assert found.access_token == TOKEN
+    assert await stack.lookup().by_shop_id(UUID(shop_id)) == found
     assert TOKEN not in repr(found)
 
 
@@ -941,3 +948,41 @@ def test_logo_upload_validation(client: TestClient, shop_id: str, body: dict[str
 def test_a_logo_key_belongs_to_its_shop() -> None:
     first, second, logo_id = uuid4(), uuid4(), uuid4()
     assert logo_key(first, logo_id) != logo_key(second, logo_id)
+
+
+# Meta tells that Woassi lost access
+
+
+async def test_losing_access_in_meta_frees_the_number(
+    client: TestClient, stack: Stack, shop_id: str, meta: respx.MockRouter
+) -> None:
+    from woassi.modules.shops.application.use_cases.whatsapp import (
+        HandleWhatsAppAccountRemoved,
+    )
+
+    connect(client, shop_id)
+    used_calls = len(meta.calls)
+
+    assert await HandleWhatsAppAccountRemoved(stack.uow()).execute(WABA) == 1
+
+    whatsapp = client.get(f"/shops/{shop_id}/whatsapp").json()
+    assert whatsapp["status"] == "DISCONNECTED"
+    assert "disconnected from Woassi in Meta" in whatsapp["error_message"]
+    assert status_of(client, shop_id) == "DRAFT"
+    assert await stack.lookup().by_phone_number_id(PHONE_ID) is None
+    # The token is useless by now: Meta is not called.
+    assert len(meta.calls) == used_calls
+    # Meta may send the event twice.
+    assert await HandleWhatsAppAccountRemoved(stack.uow()).execute(WABA) == 0
+
+
+async def test_losing_access_to_another_account_changes_nothing(
+    client: TestClient, stack: Stack, shop_id: str, meta: respx.MockRouter
+) -> None:
+    from woassi.modules.shops.application.use_cases.whatsapp import (
+        HandleWhatsAppAccountRemoved,
+    )
+
+    connect(client, shop_id)
+    assert await HandleWhatsAppAccountRemoved(stack.uow()).execute("other-waba") == 0
+    assert status_of(client, shop_id) == "ACTIVE"

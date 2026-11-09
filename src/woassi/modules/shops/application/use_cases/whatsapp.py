@@ -18,6 +18,7 @@ from woassi.modules.shops.domain.errors import (
     WhatsAppConnectionFailed,
     WhatsAppNotFound,
 )
+from woassi.modules.shops.domain.shop import WhatsAppStatus
 from woassi.shared.application.ports import Clock, SecretCipher
 from woassi.shared.domain.errors import DomainError
 
@@ -220,3 +221,33 @@ class CheckWhatsAppTokens:
                 await uow.shops.save(fresh)
                 await uow.commit()
         return invalid
+
+
+_REMOVED_IN_META = (
+    "This WhatsApp account was disconnected from Woassi in Meta. Please connect again."
+)
+
+
+class HandleWhatsAppAccountRemoved:
+    """Meta says that Woassi lost access to a WhatsApp account: release its shops' numbers.
+
+    No call to Meta: the token is useless now. Idempotent, as Meta may send the event again.
+    """
+
+    def __init__(self, uow: ShopsUnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self, waba_id: str) -> int:
+        """Return how many shops lost their number."""
+        async with self._uow as uow:
+            shops = [
+                shop
+                for shop in await uow.shops.list_by_waba_id(waba_id)
+                if shop.whatsapp is not None
+                and shop.whatsapp.status is not WhatsAppStatus.DISCONNECTED
+            ]
+            for shop in shops:
+                shop.disconnect_whatsapp(_REMOVED_IN_META)
+                await uow.shops.save(shop)
+            await uow.commit()
+        return len(shops)

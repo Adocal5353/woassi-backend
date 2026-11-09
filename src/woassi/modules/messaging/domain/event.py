@@ -4,15 +4,45 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
-class MetaEvent:
-    """Incoming WhatsApp message; `phone_number_id` identifies the target shop.
+class InboundMessage:
+    """Message from a customer to a shop's number.
 
-    `sender` and `payload` are personal data: repr=False keeps them out of logs, including
-    arq's, which logs the repr of every job's arguments.
+    The customer is identified by `sender_user_id`, the business-scoped user id (BSUID), which
+    Meta always sends. `sender_phone` is missing when the customer uses a WhatsApp username.
+
+    Every customer field is personal data: repr=False keeps them out of logs, including arq's,
+    which logs the repr of every job's arguments.
     """
 
     phone_number_id: str
     message_id: str
-    sender: str = field(repr=False)
     type: str
-    payload: Mapping[str, Any] = field(repr=False)
+    sender_user_id: str | None = field(default=None, repr=False)
+    sender_phone: str | None = field(default=None, repr=False)
+    profile_name: str | None = field(default=None, repr=False)
+    payload: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    # Message this one replies to, e.g. the one carrying the button that was tapped.
+    context_message_id: str | None = None
+    timestamp: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MessageStatusUpdate:
+    """Delivery status of a message sent by a shop."""
+
+    phone_number_id: str
+    message_id: str
+    status: str
+    error_codes: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AccountUpdate:
+    """Change on a WhatsApp Business Account, e.g. Woassi lost access to it."""
+
+    waba_id: str
+    event: str
+    time: int | None = None
+
+
+type MetaEvent = InboundMessage | MessageStatusUpdate | AccountUpdate

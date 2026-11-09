@@ -2,34 +2,27 @@
 
 Checked on 2026-11-06 against Meta's documentation, for Graph API v27.0.
 
-Secrets travel in query strings where Meta documents them there, so nothing here may log a URL,
-and an httpx exception, which holds the URL, must not leave this module.
+Secrets travel in query strings: see GraphClient, which keeps them out of logs and exceptions.
 """
 
 from typing import Any
 
-import httpx
 import structlog
 
 from woassi.modules.shops.application.ports import MetaError, MetaFailure, MetaPhoneNumber
-from woassi.shared.infrastructure.logging import silence_url_logging
+from woassi.shared.infrastructure.meta_graph import GraphClient, GraphUnavailable
 
 log = structlog.get_logger()
 
-GRAPH_URL = "https://graph.facebook.com"
 INVALID_TOKEN_CODE = 190
 CLOUD_API_PLATFORM = "CLOUD_API"
 
 
 class HttpxMetaOnboarding:
-    def __init__(
-        self, client: httpx.AsyncClient, *, app_id: str, app_secret: str, graph_version: str
-    ) -> None:
-        silence_url_logging()
-        self._client = client
+    def __init__(self, graph: GraphClient, *, app_id: str, app_secret: str) -> None:
+        self._graph = graph
         self._app_id = app_id
         self._app_secret = app_secret
-        self._base_url = f"{GRAPH_URL}/{graph_version}"
 
     async def exchange_code(self, code: str) -> str:
         # https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-solution-partner
@@ -133,21 +126,17 @@ class HttpxMetaOnboarding:
         token: str | None = None,
         invalid_request: MetaFailure = MetaFailure.REJECTED,
     ) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {token}"} if token else None
         try:
-            response = await self._client.request(
-                method, f"{self._base_url}{path}", params=params, json=json, headers=headers
+            response = await self._graph.request(
+                method, path, params=params, json=json, token=token
             )
-            data = response.json()
-        except (httpx.HTTPError, ValueError):
-            # `from None`: the original exception holds the URL, and so the secrets.
+        except GraphUnavailable:
             raise MetaError(MetaFailure.UNAVAILABLE) from None
 
-        if response.is_success and isinstance(data, dict):
-            return data
-        error = data.get("error", {}) if isinstance(data, dict) else {}
-        meta_code = error.get("code") if isinstance(error, dict) else None
-        if response.status_code >= 500:
+        if response.ok:
+            return response.data
+        meta_code = response.error_code
+        if response.status >= 500:
             raise MetaError(MetaFailure.UNAVAILABLE, meta_code=meta_code)
         if meta_code == INVALID_TOKEN_CODE and invalid_request is MetaFailure.REJECTED:
             raise MetaError(MetaFailure.INVALID_TOKEN, meta_code=meta_code)

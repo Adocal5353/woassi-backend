@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from woassi.config import Settings
 from woassi.integration.accounts import AccountsAuthenticator
 from woassi.integration.images import CatalogLogoProcessor
-from woassi.integration.shops import ShopsLookup, ShopsOwnership
+from woassi.integration.orders import UnhandledInboundMessages
+from woassi.integration.shops import ShopsConnections, ShopsOwnership, ShopsWhatsAppAccounts
 from woassi.modules.accounts.application.facade import AccountsUseCases
 from woassi.modules.accounts.application.ports import (
     AccountsUnitOfWork,
@@ -56,12 +57,23 @@ from woassi.modules.catalog.infrastructure.image_processor import PillowImagePro
 from woassi.modules.catalog.infrastructure.photo_queue import ArqPhotoJobQueue
 from woassi.modules.catalog.infrastructure.uow import SqlAlchemyCatalogUoW
 from woassi.modules.messaging.application.facade import MessagingUseCases
-from woassi.modules.messaging.application.ports import EventQueue, ShopByPhoneNumberPort
+from woassi.modules.messaging.application.ports import (
+    EventQueue,
+    InboundMessageHandler,
+    MessagingUnitOfWork,
+    ShopConnectionsPort,
+    WhatsAppAccountsPort,
+    WhatsAppSender,
+)
+from woassi.modules.messaging.application.use_cases.processing import HandleMetaEvent
+from woassi.modules.messaging.application.use_cases.sending import SendWhatsAppMessage
 from woassi.modules.messaging.application.use_cases.webhook import (
     ReceiveMetaWebhook,
     VerifyMetaSubscription,
 )
 from woassi.modules.messaging.infrastructure.event_queue import ArqEventQueue
+from woassi.modules.messaging.infrastructure.uow import SqlAlchemyMessagingUoW
+from woassi.modules.messaging.infrastructure.whatsapp_sender import HttpxWhatsAppSender
 from woassi.modules.shops.application.facade import ShopsUseCases
 from woassi.modules.shops.application.ports import (
     LogoProcessor,
@@ -82,6 +94,7 @@ from woassi.modules.shops.application.use_cases.shops import (
     GetShop,
     ListShops,
     ResolveShopByPhoneNumber,
+    ResolveShopConnection,
     UpdateShop,
 )
 from woassi.modules.shops.application.use_cases.whatsapp import (
@@ -89,6 +102,7 @@ from woassi.modules.shops.application.use_cases.whatsapp import (
     ConnectWhatsApp,
     DisconnectWhatsApp,
     GetWhatsApp,
+    HandleWhatsAppAccountRemoved,
 )
 from woassi.modules.shops.infrastructure.meta_onboarding import HttpxMetaOnboarding
 from woassi.modules.shops.infrastructure.uow import SqlAlchemyShopsUoW
@@ -114,6 +128,7 @@ from woassi.shared.infrastructure.events.arq_dispatcher import ArqDeferredDispat
 from woassi.shared.infrastructure.events.bus import InProcessEventBus
 from woassi.shared.infrastructure.health import minio_check, postgres_check, redis_check
 from woassi.shared.infrastructure.idempotency import RedisIdempotencyStore
+from woassi.shared.infrastructure.meta_graph import GraphClient
 from woassi.shared.infrastructure.phone import PhonenumbersNormalizer
 from woassi.shared.infrastructure.rate_limiter import RedisRateLimiter
 from woassi.shared.infrastructure.storage.minio_storage import MinioStorage
@@ -217,17 +232,49 @@ class Container(
 
     def meta_onboarding(self) -> MetaOnboardingPort:
         return HttpxMetaOnboarding(
-            self.http,
+            self.graph(),
             app_id=self.settings.meta_app_id,
             app_secret=self.settings.meta_app_secret,
-            graph_version=self.settings.meta_graph_version,
         )
+
+    def graph(self) -> GraphClient:
+        return GraphClient(self.http, graph_version=self.settings.meta_graph_version)
 
     def logo_processor(self) -> LogoProcessor:
         return CatalogLogoProcessor(self.image_processor())
 
-    def shop_by_phone_number(self) -> ShopByPhoneNumberPort:
-        return ShopsLookup(ResolveShopByPhoneNumber(self.shops_uow(), self.cipher))
+    def shop_connections(self) -> ShopConnectionsPort:
+        return ShopsConnections(
+            ResolveShopByPhoneNumber(self.shops_uow(), self.cipher),
+            ResolveShopConnection(self.shops_uow(), self.cipher),
+        )
+
+    def whatsapp_accounts(self) -> WhatsAppAccountsPort:
+        return ShopsWhatsAppAccounts(HandleWhatsAppAccountRemoved(self.shops_uow()))
+
+    def inbound_message_handler(self) -> InboundMessageHandler:
+        return UnhandledInboundMessages()
+
+    def messaging_uow(self) -> MessagingUnitOfWork:
+        return SqlAlchemyMessagingUoW(self.sessions, self.event_bus, self.clock)
+
+    def whatsapp_sender(self) -> WhatsAppSender:
+        return HttpxWhatsAppSender(self.graph())
+
+    # Use cases: messaging, worker side and for other modules
+    def handle_meta_event(self) -> HandleMetaEvent:
+        return HandleMetaEvent(
+            self.messaging_uow(),
+            self.shop_connections(),
+            self.whatsapp_accounts(),
+            self.inbound_message_handler(),
+            self.clock,
+        )
+
+    def send_whatsapp_message(self) -> SendWhatsAppMessage:
+        return SendWhatsAppMessage(
+            self.messaging_uow(), self.shop_connections(), self.whatsapp_sender(), self.clock
+        )
 
     def catalog_uow(self) -> CatalogUnitOfWork:
         return SqlAlchemyCatalogUoW(self.sessions, self.event_bus, self.clock)

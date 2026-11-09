@@ -2,7 +2,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
 
 from woassi.config import get_settings
@@ -12,6 +12,9 @@ from woassi.shared.domain.events import DomainEvent
 from woassi.shared.infrastructure.logging import configure_logging, configure_sentry
 
 log = structlog.get_logger()
+
+MAX_TRIES = 5
+RETRY_DELAY_S = 30
 
 
 async def on_startup(ctx: dict[str, Any]) -> None:
@@ -30,13 +33,14 @@ async def process_photo(ctx: dict[str, Any], photo_id: str) -> None:
 
 
 async def process_meta_event(ctx: dict[str, Any], event: MetaEvent) -> None:
-    # TODO: idempotency with process_once on message_id, then routing to orders.
-    log.info(
-        "meta_event_received",
-        phone_number_id=event.phone_number_id,
-        message_id=event.message_id,
-        type=event.type,
-    )
+    """Meta does not resend once the API answered 200: the worker has to retry by itself."""
+    try:
+        await ctx["container"].handle_meta_event().execute(event)
+    except Exception as error:
+        if ctx["job_try"] >= MAX_TRIES:
+            log.exception("meta_event_dropped", job_try=ctx["job_try"], meta_event=repr(event))
+            raise
+        raise Retry(defer=RETRY_DELAY_S * ctx["job_try"]) from error
 
 
 async def dispatch_event(ctx: dict[str, Any], subscriber: str, event: DomainEvent) -> None:
@@ -56,3 +60,4 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     # With no stored result, the process_photo job id is freed as soon as the job ends.
     keep_result = 0
+    max_tries = MAX_TRIES

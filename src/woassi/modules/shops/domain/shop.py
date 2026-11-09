@@ -231,12 +231,12 @@ class Shop(Entity):
         self.whatsapp.error_message = message
         self._back_to_draft()
 
-    def disconnect_whatsapp(self) -> None:
+    def disconnect_whatsapp(self, reason: str | None = None) -> None:
         """Frees the number, which another shop may then connect."""
         if self.whatsapp is None:
             raise WhatsAppNotFound("This shop has no WhatsApp number.")
         self.whatsapp = WhatsAppAccount(
-            waba_id=self.whatsapp.waba_id, status=WhatsAppStatus.DISCONNECTED
+            waba_id=self.whatsapp.waba_id, status=WhatsAppStatus.DISCONNECTED, error_message=reason
         )
         self._back_to_draft()
 

@@ -28,7 +28,8 @@ BODY = json.dumps(
                                 {"from": "1", "id": "a", "type": "text", "text": {"body": "x"}},
                                 {"from": "1", "id": "b", "type": "text", "text": {"body": "y"}},
                             ],
-                        }
+                        },
+                        "field": "messages",
                     }
                 ]
             }

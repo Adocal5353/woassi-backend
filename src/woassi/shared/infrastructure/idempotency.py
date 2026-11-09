@@ -28,6 +28,20 @@ class ProcessedKeyModel(Base):
     )
 
 
+async def claim_key(session: AsyncSession, source: str, key: str) -> bool:
+    """Insert (source, key) in the caller's transaction. False if it is already there.
+
+    A concurrent duplicate blocks on the unique key until the first transaction ends.
+    """
+    result = await session.execute(
+        insert(ProcessedKeyModel)
+        .values(source=source, key=key)
+        .on_conflict_do_nothing()
+        .returning(ProcessedKeyModel.key)
+    )
+    return result.first() is not None
+
+
 @asynccontextmanager
 async def process_once(session: AsyncSession, source: str, key: str) -> AsyncIterator[bool]:
     """Yield True the first time (source, key) is seen, False afterwards.
@@ -37,13 +51,7 @@ async def process_once(session: AsyncSession, source: str, key: str) -> AsyncIte
     duplicate waits on the unique key until the first transaction ends.
     """
     async with session.begin_nested():
-        result = await session.execute(
-            insert(ProcessedKeyModel)
-            .values(source=source, key=key)
-            .on_conflict_do_nothing()
-            .returning(ProcessedKeyModel.key)
-        )
-        yield result.first() is not None
+        yield await claim_key(session, source, key)
 
 
 def _dump(fingerprint: str, response: StoredResponse | None) -> str:
